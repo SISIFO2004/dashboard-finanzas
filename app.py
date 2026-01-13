@@ -131,7 +131,6 @@ def run_simulation(S0, mu, sigma, T, N, dt, jumps, lambda_j, mu_j, sigma_j):
         jump_term = 0
         if jumps:
             # Poisson: Número de saltos en el intervalo dt
-            # Nota: lambda se ajusta al intervalo dt
             n_jumps = np.random.poisson(lambda_j * dt, N)
             
             # Si hay saltos, calculamos su magnitud Log-Normal
@@ -219,7 +218,7 @@ if st.button(f"⚡ EJECUTAR ANÁLISIS PARA {ticker}", type="primary"):
                     x=future_dates, 
                     y=simulation_results[:, i], 
                     mode='lines', 
-                    line=dict(width=0.5, color='rgba(100, 200, 255, 0.2)'), # Opacidad ajustada en color string
+                    line=dict(width=0.5, color='rgba(100, 200, 255, 0.2)'),
                     showlegend=False,
                     hoverinfo='skip'
                 ))
@@ -273,19 +272,88 @@ if st.button(f"⚡ EJECUTAR ANÁLISIS PARA {ticker}", type="primary"):
             * **Conditional VaR (CVaR):** En el escenario de colapso extremo (peor {(1-confidence_level):.0%} de los casos), el precio promedio esperado es **{cvar_value:.2f} {info['currency']}**.
             """)
             
-        # TAB 3: RESUMEN TÉCNICO
+        # TAB 3: RESUMEN TÉCNICO Y EXPORTACIÓN
         with tab_data:
-            st.write("#### Parámetros del Modelo")
+            st.write("#### 💾 Exportación de Datos")
+            
+            # Preparar Dataframe para descarga
+            df_export = pd.DataFrame(final_prices, columns=["Precio_Simulado_Final"])
+            df_export["Escenario"] = df_export.index + 1
+            
+            # Convertir a CSV
+            csv = df_export.to_csv(index=False).encode('utf-8')
+            
+            st.download_button(
+                label="📥 Descargar Resultados de Simulación (CSV)",
+                data=csv,
+                file_name=f'simulacion_{ticker}_{datetime.now().strftime("%Y%m%d")}.csv',
+                mime='text/csv',
+                help="Descarga la distribución final de precios para auditoría externa."
+            )
+
+            st.write("#### ⚙️ Parámetros del Modelo")
             st.json({
                 "Modelo": "Merton Jump Diffusion" if enable_jumps else "Geometric Brownian Motion",
-                "Precio Inicial (S0)": S0,
-                "Drift Anual (mu)": mu_final,
+                "Precio Spot (S0)": S0,
+                "Drift (mu)": mu_final,
                 "Volatilidad (sigma)": sigma_base,
                 "Saltos Activos": enable_jumps,
                 "Intensidad Saltos (Lambda)": jump_prob if enable_jumps else 0,
                 "Horizonte (T)": time_horizon,
-                "Iteraciones (N)": n_simulations
+                "Iteraciones (N)": n_simulations,
+                "Nivel Confianza VaR": confidence_level
             })
+
+        # --- SECCIÓN: DIRECTRIZ ESTRATÉGICA (RESTITUIDA Y MEJORADA) ---
+        st.write("---")
+        st.subheader("🧭 Directriz Estratégica (Algorithmic Guidance)")
+        
+        # Lógica de Decisión para la recomendación
+        col_strat1, col_strat2 = st.columns(2)
+        
+        # 1. Determinación de Tendencia
+        if prob_positive_return > 0.65:
+            signal_color = "🟢"
+            signal_text = "TENDENCIA ALCISTA (BULLISH)"
+            advice_text = "El modelo sugiere una probabilidad estadística favorable para posiciones LARGAS."
+            box_type = "success"
+        elif prob_positive_return < 0.35:
+            signal_color = "🔴"
+            signal_text = "TENDENCIA BAJISTA (BEARISH)"
+            advice_text = "La proyección indica deterioro de valor. Se sugiere cobertura (Hedging) o evitar entrada."
+            box_type = "error"
+        else:
+            signal_color = "🟡"
+            signal_text = "INCERTIDUMBRE / RANGO (NEUTRAL)"
+            advice_text = "No existe una ventaja estadística clara (Ruido > Tendencia). Se recomienda cautela."
+            box_type = "warning"
+            
+        # 2. Perfil de Volatilidad
+        if sigma_base < 0.15:
+            vol_profile = "Baja (Conservador)"
+        elif sigma_base < 0.35:
+            vol_profile = "Media (Moderada)"
+        else:
+            vol_profile = "Alta (Especulativa)"
+
+        with col_strat1:
+            st.markdown(f"#### Señal del Modelo: {signal_color} {signal_text}")
+            if box_type == "success":
+                st.success(advice_text)
+            elif box_type == "error":
+                st.error(advice_text)
+            else:
+                st.warning(advice_text)
+                
+        with col_strat2:
+            st.markdown("#### Parámetros de Gestión")
+            st.info(f"""
+            * **Perfil de Activo:** {vol_profile} (Vol: {sigma_base:.1%})
+            * **Stop Loss Técnico (Sugerido):** {var_value:.2f} {info['currency']}
+            * **Probabilidad de Éxito:** {prob_positive_return:.1%}
+            """)
+
+        st.caption("⚠️ **Disclaimer:** Esta herramienta es un modelo de simulación matemática para apoyo en la toma de decisiones, no constituye asesoramiento financiero certificado.")
 
 else:
     st.info("ℹ️ Seleccione los parámetros en la barra lateral y presione 'EJECUTAR ANÁLISIS' para iniciar el cálculo.")
