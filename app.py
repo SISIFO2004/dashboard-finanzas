@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from fpdf import FPDF
 import requests
 import time
+import pandas_datareader.data as web
 
 # --- CONFIGURACIÓN DE LA APLICACIÓN ---
 st.set_page_config(
@@ -82,58 +83,83 @@ ASSET_UNIVERSE = {
     "₿ Bitcoin USD (BTC-USD)": "BTC-USD"
 }
 
-# --- INGESTA BLINDADA (RETRY LOGIC) ---
+# --- INGESTA HÍBRIDA (YAHOO + STOOQ) ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_market_data(symbol):
-    """Descarga resiliente con reintentos múltiples."""
+    """
+    Sistema de Ingesta Híbrido:
+    1. Intenta Yahoo Finance (Metadata rica).
+    2. Si falla, activa Failover a Stooq (Datos puros).
+    """
     
-    # Configuración de Headers Anti-Bot
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-
-    max_retries = 3
+    data_source = "None"
     df = pd.DataFrame()
+    asset_info = {}
     
-    # INTENTO 1 y 2: Método Ticker estándar
-    for i in range(max_retries):
-        try:
-            print(f"Intento {i+1} para {symbol}...")
-            session = requests.Session()
-            session.headers.update(headers)
+    # ---------------------------------------------------------
+    # INTENTO 1: YAHOO FINANCE (PRIMARIO)
+    # ---------------------------------------------------------
+    try:
+        print(f"[INFO] Intentando conectar con Yahoo Finance para {symbol}...")
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
+        session = requests.Session()
+        session.headers.update(headers)
+        
+        stock = yf.Ticker(symbol, session=session)
+        df = stock.history(period="2y")
+        
+        if not df.empty:
+            data_source = "Yahoo Finance"
+            # Intentar capturar metadata real
+            try:
+                info_curr = stock.info.get('currency', 'USD')
+                info_name = stock.info.get('longName', symbol)
+            except:
+                info_curr = 'USD'
+                info_name = symbol
             
-            # Método A: Ticker.history (Más limpio)
-            stock = yf.Ticker(symbol, session=session)
-            df = stock.history(period="2y")
+            asset_info = {"currency": info_curr, "name": info_name}
+
+    except Exception as e:
+        print(f"[WARN] Yahoo Finance falló: {e}")
+
+    # ---------------------------------------------------------
+    # INTENTO 2: STOOQ (SECUNDARIO / FAILOVER)
+    # ---------------------------------------------------------
+    if df.empty:
+        print(f"[INFO] Activando Protocolo Failover: STOOQ para {symbol}...")
+        try:
+            # Stooq a veces usa códigos distintos, pero para US stocks suele ser igual
+            # Definimos fechas manualmente para 2 años
+            start = datetime.now() - timedelta(days=730)
+            end = datetime.now()
+            
+            df = web.DataReader(symbol, 'stooq', start, end)
             
             if not df.empty:
-                break # ¡Éxito! Salimos del bucle
-            
-            # Si falla, esperamos un poco
-            time.sleep(1)
-            
-            # Método B: yf.download (Más agresivo, fallback)
-            if i == 1: 
-                print("Activando método de respaldo (Download)...")
-                df = yf.download(symbol, period="2y", progress=False, session=session)
-                if not df.empty:
-                    break
-
+                data_source = "Stooq (Backup)"
+                # Stooq devuelve los datos al revés (más nuevo arriba), ordenamos:
+                df = df.sort_index()
+                # Stooq no da metadata, usamos defaults
+                asset_info = {"currency": "USD", "name": f"{symbol} (Data from Stooq)"}
+                
         except Exception as e:
-            print(f"Fallo intento {i+1}: {e}")
-            time.sleep(1.5)
-    
-    # Si después de 3 intentos sigue vacío
-    if df.empty:
-        return None, None
-        
-    # Procesamiento
-    try:
-        # Ajuste para diferentes formatos de yfinance
-        if 'Close' not in df.columns:
-             # A veces descarga con MultiIndex, limpiamos
-             df = df.xs(symbol, axis=1, level=1, drop_level=True) if symbol in df.columns else df
+            print(f"[ERROR] Stooq también falló: {e}")
 
+    # ---------------------------------------------------------
+    # PROCESAMIENTO FINAL
+    # ---------------------------------------------------------
+    if df.empty:
+        return None, None, None # Fallo total
+
+    try:
+        # Normalización de columnas (Stooq a veces usa minúsculas)
+        df.columns = [c.capitalize() for c in df.columns]
+        
+        if 'Close' not in df.columns:
+            return None, None, None
+
+        # Cálculos matemáticos
         df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
         df.dropna(inplace=True)
         
@@ -141,24 +167,16 @@ def fetch_market_data(symbol):
         volatility = df['Log_Ret'].std() * np.sqrt(252)
         historical_drift = df['Log_Ret'].mean() * 252
         
-        # Intentar obtener info extra, si falla usar defaults
-        try:
-            info_curr = stock.info.get('currency', 'USD')
-            info_name = stock.info.get('longName', symbol)
-        except:
-            info_curr = 'USD'
-            info_name = symbol
+        # Completar info
+        asset_info["price"] = float(last_price)
+        if "currency" not in asset_info: asset_info["currency"] = "USD"
+        if "name" not in asset_info: asset_info["name"] = symbol
 
-        # Forzar flotante simple para evitar errores de array
-        if isinstance(last_price, pd.Series):
-            last_price = last_price.iloc[0]
-
-        asset_info = {"price": float(last_price), "currency": info_curr, "name": info_name}
-        return df, (volatility, historical_drift, asset_info)
+        return df, (volatility, historical_drift, asset_info), data_source
 
     except Exception as e:
-        print(f"Error procesando datos: {e}")
-        return None, None
+        print(f"[ERROR] Error matemático en procesamiento: {e}")
+        return None, None, None
 
 # --- MOTOR DE SIMULACIÓN ---
 def run_simulation(S0, mu, sigma, T, N, dt, jumps, lambda_j, mu_j, sigma_j):
@@ -177,7 +195,7 @@ def run_simulation(S0, mu, sigma, T, N, dt, jumps, lambda_j, mu_j, sigma_j):
 
 # --- INTERFAZ ---
 st.title("📈 Quantitative Risk Analytics Engine")
-st.markdown("Sistema de Simulación Estocástica y Valoración de Riesgo de Mercado. Generación de reportes PDF profesionales.")
+st.markdown("Sistema de Simulación Estocástica y Valoración de Riesgo de Mercado. Arquitectura redundante (Yahoo/Stooq).")
 
 # Sidebar
 st.sidebar.header("1. Configuración")
@@ -202,16 +220,23 @@ with st.sidebar.expander("⚙️ Calibración", expanded=False):
 
 # Main Execution
 if st.button(f"⚡ EJECUTAR ANÁLISIS PARA {ticker}", type="primary"):
-    with st.spinner("Conectando con Mercados Globales..."):
-        hist, metrics = fetch_market_data(ticker)
+    with st.spinner("Estableciendo conexión con proveedores de datos..."):
+        # Llamada a la función híbrida
+        hist, metrics, source = fetch_market_data(ticker)
     
     if hist is None:
-        st.error("⚠️ Error persistente de conexión con Yahoo Finance. Los servidores están saturados. Por favor intenta de nuevo en 30 segundos.")
+        st.error(f"❌ Error Crítico: No se pudo obtener datos de {ticker} en ninguno de los proveedores (Yahoo/Stooq). Verifica el Ticker.")
     else:
         sigma, mu_h, info = metrics
         S0 = info['price']
         mu_f = m_drift if ov_drift else mu_h
         
+        # Mensaje de éxito indicando la fuente
+        if source == "Yahoo Finance":
+            st.success(f"✅ Datos obtenidos vía Yahoo Finance API (Principal).")
+        else:
+            st.warning(f"⚠️ Yahoo Finance no responde. Datos obtenidos vía Stooq (Respaldo). La metadata puede ser limitada.")
+
         sims = run_simulation(S0, mu_f, sigma, T_days, N_sims, 1/252, jumps, j_prob, j_mean, j_std)
         final_P = sims[-1]
         
