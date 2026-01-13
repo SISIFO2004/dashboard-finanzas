@@ -6,7 +6,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from fpdf import FPDF
 import requests
-import base64
+import time
 
 # --- CONFIGURACIÓN DE LA APLICACIÓN ---
 st.set_page_config(
@@ -15,10 +15,9 @@ st.set_page_config(
     page_icon="📈"
 )
 
-# --- CLASE PARA GENERAR PDF PROFESIONAL ---
+# --- CLASE PDF ---
 class PDF(FPDF):
     def header(self):
-        # Encabezado Corporativo
         self.set_font('Arial', 'B', 15)
         self.cell(0, 10, 'QUANTITATIVE RISK REPORT', 0, 1, 'C')
         self.set_font('Arial', 'I', 10)
@@ -34,61 +33,43 @@ class PDF(FPDF):
 def create_pdf(ticker, current_price, sigma, mu, var_val, cvar_val, conf_level, prob_success, horizon, recommendation):
     pdf = PDF()
     pdf.add_page()
-    
-    # 1. TÍTULO
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 10, f'Reporte Ejecutivo para: {ticker}', 0, 1)
     pdf.set_font('Arial', '', 10)
     pdf.cell(0, 10, f'Fecha de Emision: {datetime.now().strftime("%d-%m-%Y %H:%M")}', 0, 1)
     pdf.ln(5)
-
-    # 2. TABLA DE MÉTRICAS
     pdf.set_fill_color(230, 230, 230)
     pdf.set_font('Arial', 'B', 10)
     pdf.cell(95, 10, "Métrica", 1, 0, 'C', 1)
     pdf.cell(95, 10, "Valor Calculado", 1, 1, 'C', 1)
-
     pdf.set_font('Arial', '', 10)
     pdf.cell(95, 10, "Precio Actual (Spot)", 1, 0)
     pdf.cell(95, 10, f"{current_price:.2f} USD", 1, 1)
-    
     pdf.cell(95, 10, "Volatilidad Anualizada", 1, 0)
     pdf.cell(95, 10, f"{sigma:.2%}", 1, 1)
-    
     pdf.cell(95, 10, f"Value at Risk (VaR {conf_level:.0%})", 1, 0)
     pdf.cell(95, 10, f"{var_val:.2f} USD", 1, 1)
-    
     pdf.cell(95, 10, f"Conditional VaR (CVaR)", 1, 0)
     pdf.cell(95, 10, f"{cvar_val:.2f} USD", 1, 1)
-
     pdf.cell(95, 10, "Horizonte de Proyeccion", 1, 0)
     pdf.cell(95, 10, f"{horizon} Dias Operativos", 1, 1)
     pdf.ln(10)
-
-    # 3. INTERPRETACIÓN
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 10, 'Diagnostico Algoritmico', 0, 1)
-    
     pdf.set_font('Arial', '', 11)
     pdf.multi_cell(0, 7, f"Basado en {recommendation['n_sims']} simulaciones de Montecarlo, el modelo presenta una probabilidad de retorno positivo del {prob_success:.1%}.\n\n")
-    
     pdf.set_font('Arial', 'B', 11)
     pdf.cell(0, 10, f"Recomendacion Tecnica: {recommendation['signal']}", 0, 1)
-    
     pdf.set_font('Arial', '', 11)
     pdf.multi_cell(0, 7, f"Analisis: {recommendation['advice']}\n")
-    
     pdf.ln(5)
     pdf.multi_cell(0, 7, f"Perfil de Riesgo: Se ha detectado una volatilidad del {sigma:.1%}. Se sugiere establecer un Stop Loss tecnico en {var_val:.2f} USD para limitar la exposicion a perdidas mas alla del nivel de confianza del {conf_level:.0%}.")
-
-    # 4. DISCLAIMER
     pdf.ln(20)
     pdf.set_font('Arial', 'I', 8)
     pdf.multi_cell(0, 5, "DISCLAIMER: Este reporte es generado automaticamente por un modelo estocastico. Los resultados son probabilisticos y no garantizan rendimientos futuros. No constituye asesoramiento financiero certificado.")
-    
     return pdf.output(dest='S').encode('latin-1')
 
-# --- CATÁLOGO DE ACTIVOS ---
+# --- ACTIVOS ---
 ASSET_UNIVERSE = {
     "🔍 Entrada Manual (Ticker)": "MANUAL",
     "🇺🇸 Tesla Inc. (TSLA)": "TSLA",
@@ -101,70 +82,58 @@ ASSET_UNIVERSE = {
     "₿ Bitcoin USD (BTC-USD)": "BTC-USD"
 }
 
-# --- SISTEMA DE LOGS ---
-def sys_log(message, level="INFO"):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-    print(f"[{timestamp}] [{level}] {message}")
-
-# --- TÍTULO ---
-st.title("📈 Quantitative Risk Analytics Engine")
-st.markdown("""
-**Sistema de Simulación Estocástica y Valoración de Riesgo de Mercado.**
-Generación de reportes PDF profesionales basados en modelos de *Merton Jump Diffusion*.
-""")
-
-# --- BARRA LATERAL ---
-st.sidebar.header("1. Configuración del Activo")
-selected_option = st.sidebar.selectbox("Instrumento Financiero:", list(ASSET_UNIVERSE.keys()), index=1)
-if ASSET_UNIVERSE[selected_option] == "MANUAL":
-    ticker = st.sidebar.text_input("Ingresar Ticker:", value="GOOGL").upper()
-else:
-    ticker = ASSET_UNIVERSE[selected_option]
-
-st.sidebar.divider()
-st.sidebar.header("2. Parámetros de Simulación")
-time_horizon = st.sidebar.slider("Horizonte (Días)", 5, 365, 30)
-n_simulations = st.sidebar.selectbox("Iteraciones Montecarlo", [1000, 5000, 10000], index=1)
-
-st.sidebar.divider()
-st.sidebar.header("3. Ajuste de Modelo (Quant)")
-with st.sidebar.expander("⚙️ Calibración Avanzada", expanded=False):
-    override_drift = st.checkbox("Sobrescribir Drift (View)")
-    manual_drift = st.slider("Drift Anual (%)", -50.0, 100.0, 10.0, step=0.5) / 100
-    enable_jumps = st.checkbox("Habilitar Saltos (Merton)", value=True)
-    jump_prob = st.slider("Probabilidad Salto", 0.0, 50.0, 5.0) / 100
-    jump_mean = st.slider("Magnitud Salto (%)", -30.0, 30.0, -5.0) / 100
-    jump_std = st.slider("Volatilidad Salto (%)", 0.0, 50.0, 10.0) / 100
-    confidence_level = st.selectbox("Nivel Confianza (VaR)", [0.90, 0.95, 0.99], index=1)
-
-# --- INGESTA DE DATOS (VERSIÓN ANTI-BLOQUEO) ---
+# --- INGESTA BLINDADA (RETRY LOGIC) ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_market_data(symbol):
-    """Descarga datos históricos fingiendo ser un navegador real."""
-    sys_log(f"Iniciando solicitud de datos para: {symbol}")
-    try:
-        # Configurar headers para evadir bloqueo 403 de Yahoo
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Connection': 'keep-alive'
-        })
+    """Descarga resiliente con reintentos múltiples."""
+    
+    # Configuración de Headers Anti-Bot
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
 
-        # Inyectar sesión en yfinance
-        stock = yf.Ticker(symbol, session=session)
+    max_retries = 3
+    df = pd.DataFrame()
+    
+    # INTENTO 1 y 2: Método Ticker estándar
+    for i in range(max_retries):
+        try:
+            print(f"Intento {i+1} para {symbol}...")
+            session = requests.Session()
+            session.headers.update(headers)
+            
+            # Método A: Ticker.history (Más limpio)
+            stock = yf.Ticker(symbol, session=session)
+            df = stock.history(period="2y")
+            
+            if not df.empty:
+                break # ¡Éxito! Salimos del bucle
+            
+            # Si falla, esperamos un poco
+            time.sleep(1)
+            
+            # Método B: yf.download (Más agresivo, fallback)
+            if i == 1: 
+                print("Activando método de respaldo (Download)...")
+                df = yf.download(symbol, period="2y", progress=False, session=session)
+                if not df.empty:
+                    break
+
+        except Exception as e:
+            print(f"Fallo intento {i+1}: {e}")
+            time.sleep(1.5)
+    
+    # Si después de 3 intentos sigue vacío
+    if df.empty:
+        return None, None
         
-        # Intentar descarga
-        df = stock.history(period="2y")
-        
-        if df.empty:
-            sys_log(f"ADVERTENCIA: Payload vacío para {symbol}. Bloqueo persistente.", "WARN")
-            return None, None
-        
-        sys_log(f"Datos recibidos exitosamente: {len(df)} registros.")
-        
-        # Procesamiento matemático
+    # Procesamiento
+    try:
+        # Ajuste para diferentes formatos de yfinance
+        if 'Close' not in df.columns:
+             # A veces descarga con MultiIndex, limpiamos
+             df = df.xs(symbol, axis=1, level=1, drop_level=True) if symbol in df.columns else df
+
         df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
         df.dropna(inplace=True)
         
@@ -172,19 +141,23 @@ def fetch_market_data(symbol):
         volatility = df['Log_Ret'].std() * np.sqrt(252)
         historical_drift = df['Log_Ret'].mean() * 252
         
-        # Manejo seguro de metadatos
+        # Intentar obtener info extra, si falla usar defaults
         try:
             info_curr = stock.info.get('currency', 'USD')
             info_name = stock.info.get('longName', symbol)
         except:
             info_curr = 'USD'
             info_name = symbol
-            
-        asset_info = {"price": last_price, "currency": info_curr, "name": info_name}
+
+        # Forzar flotante simple para evitar errores de array
+        if isinstance(last_price, pd.Series):
+            last_price = last_price.iloc[0]
+
+        asset_info = {"price": float(last_price), "currency": info_curr, "name": info_name}
         return df, (volatility, historical_drift, asset_info)
-        
+
     except Exception as e:
-        sys_log(f"ERROR CRÍTICO en API: {str(e)}", "ERROR")
+        print(f"Error procesando datos: {e}")
         return None, None
 
 # --- MOTOR DE SIMULACIÓN ---
@@ -198,78 +171,70 @@ def run_simulation(S0, mu, sigma, T, N, dt, jumps, lambda_j, mu_j, sigma_j):
         if jumps:
             n_jumps = np.random.poisson(lambda_j * dt, N)
             if np.any(n_jumps > 0):
-                jump_magnitude = np.random.normal(mu_j, sigma_j, N) * n_jumps
-                jump_term = jump_magnitude
+                jump_term = np.random.normal(mu_j, sigma_j, N) * n_jumps
         prices[t] = prices[t-1] * np.exp(diffusion + jump_term)
     return prices
 
-# --- CONTROLADOR PRINCIPAL ---
+# --- INTERFAZ ---
+st.title("📈 Quantitative Risk Analytics Engine")
+st.markdown("Sistema de Simulación Estocástica y Valoración de Riesgo de Mercado. Generación de reportes PDF profesionales.")
+
+# Sidebar
+st.sidebar.header("1. Configuración")
+sel = st.sidebar.selectbox("Activo:", list(ASSET_UNIVERSE.keys()), index=1)
+ticker = st.sidebar.text_input("Ticker:", value="GOOGL").upper() if ASSET_UNIVERSE[sel] == "MANUAL" else ASSET_UNIVERSE[sel]
+
+st.sidebar.divider()
+st.sidebar.header("2. Simulación")
+T_days = st.sidebar.slider("Días", 5, 365, 30)
+N_sims = st.sidebar.selectbox("Escenarios", [1000, 5000, 10000], index=1)
+
+st.sidebar.divider()
+st.sidebar.header("3. Modelo (Quant)")
+with st.sidebar.expander("⚙️ Calibración", expanded=False):
+    ov_drift = st.checkbox("Sobrescribir Drift")
+    m_drift = st.slider("Drift %", -50.0, 100.0, 10.0) / 100
+    jumps = st.checkbox("Saltos (Merton)", True)
+    j_prob = st.slider("Probabilidad", 0.0, 50.0, 5.0) / 100
+    j_mean = st.slider("Magnitud %", -30.0, 30.0, -5.0) / 100
+    j_std = st.slider("Volatilidad Salto %", 0.0, 50.0, 10.0) / 100
+    conf = st.selectbox("VaR Confianza", [0.90, 0.95, 0.99], index=1)
+
+# Main Execution
 if st.button(f"⚡ EJECUTAR ANÁLISIS PARA {ticker}", type="primary"):
+    with st.spinner("Conectando con Mercados Globales..."):
+        hist, metrics = fetch_market_data(ticker)
     
-    with st.spinner("Procesando Simulación y Generando Informe..."):
-        hist_data, metrics = fetch_market_data(ticker)
-        
-    if hist_data is None:
-        st.error("Error de conexión (Rate Limit). Intenta de nuevo en unos segundos.")
+    if hist is None:
+        st.error("⚠️ Error persistente de conexión con Yahoo Finance. Los servidores están saturados. Por favor intenta de nuevo en 30 segundos.")
     else:
-        sigma_base, mu_hist, info = metrics
+        sigma, mu_h, info = metrics
         S0 = info['price']
-        mu_final = manual_drift if override_drift else mu_hist
+        mu_f = m_drift if ov_drift else mu_h
         
-        # Ejecutar Montecarlo
-        sim_results = run_simulation(S0, mu_final, sigma_base, time_horizon, n_simulations, 1/252, enable_jumps, jump_prob, jump_mean, jump_std)
-        final_prices = sim_results[-1]
+        sims = run_simulation(S0, mu_f, sigma, T_days, N_sims, 1/252, jumps, j_prob, j_mean, j_std)
+        final_P = sims[-1]
         
-        # Métricas de Riesgo
-        alpha = 1 - confidence_level
-        var_val = np.percentile(final_prices, alpha * 100)
-        cvar_val = final_prices[final_prices <= var_value].mean() if 'var_value' in locals() else 0 # Safety check
-        # Corrección de variable local
-        cvar_val = final_prices[final_prices <= var_val].mean()
+        # Riesgo
+        alpha = 1 - conf
+        VaR = np.percentile(final_P, alpha * 100)
+        CVaR = final_P[final_P <= VaR].mean()
+        P_succ = np.sum(final_P > S0) / N_sims
         
-        prob_success = np.sum(final_prices > S0) / n_simulations
+        # Recomendación
+        if P_succ > 0.65: sig, adv = "BULLISH", "Tendencia alcista fuerte detectada."
+        elif P_succ < 0.35: sig, adv = "BEARISH", "Tendencia bajista. Precaución."
+        else: sig, adv = "NEUTRAL", "Mercado lateral sin tendencia clara."
 
-        # Lógica de Recomendación
-        if prob_success > 0.65:
-            signal = "BULLISH (ALCISTA)"
-            advice = "El modelo sugiere acumulacion. Probabilidad de exito estadisticamente alta."
-        elif prob_success < 0.35:
-            signal = "BEARISH (BAJISTA)"
-            advice = "Se sugiere cobertura o salida. Tendencia negativa predominante."
-        else:
-            signal = "NEUTRAL (RANGO)"
-            advice = "Incertidumbre elevada. No hay ventaja estadistica clara."
-
-        # VISUALIZACIÓN DASHBOARD
-        kpi1, kpi2, kpi3 = st.columns(3)
-        kpi1.metric("Precio Spot", f"{S0:.2f} {info['currency']}")
-        kpi2.metric("VaR Estimado", f"{var_val:.2f} {info['currency']}")
-        kpi3.metric("Prob. Éxito", f"{prob_success:.1%}")
+        # Dashboard
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Precio Spot", f"{S0:.2f} {info['currency']}")
+        c2.metric("VaR Estimado", f"{VaR:.2f}")
+        c3.metric("Prob. Éxito", f"{P_succ:.1%}")
         
-        tab1, tab2 = st.tabs(["📈 Gráficos", "📄 Reporte PDF"])
-        
-        with tab1:
-            st.subheader("Trayectorias Montecarlo")
-            # Optimización: graficar solo 100 rutas para no colgar el navegador
-            display_routes = sim_results[:, :100] if n_simulations > 100 else sim_results
-            st.line_chart(display_routes)
-        
-        with tab2:
-            st.subheader("Generación de Documentos")
-            st.write("El informe ejecutivo en PDF incluye el análisis de riesgo, diagnóstico algorítmico y parámetros técnicos.")
-            
-            # Preparar datos para PDF
-            rec_data = {'signal': signal, 'advice': advice, 'n_sims': n_simulations}
-            
-            # Generar PDF
-            pdf_bytes = create_pdf(ticker, S0, sigma_base, mu_final, var_val, cvar_val, confidence_level, prob_success, time_horizon, rec_data)
-            
-            st.download_button(
-                label="📄 DESCARGAR INFORME PROFESIONAL (PDF)",
-                data=pdf_bytes,
-                file_name=f"Reporte_Riesgo_{ticker}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                mime="application/pdf"
-            )
-
-else:
-    st.info("ℹ️ Seleccione parámetros y presione EJECUTAR.")
+        t1, t2 = st.tabs(["Trayectorias", "Reporte PDF"])
+        with t1:
+            st.line_chart(sims[:, :100])
+        with t2:
+            pdf_data = create_pdf(ticker, S0, sigma, mu_f, VaR, CVaR, conf, P_succ, T_days, {'signal':sig, 'advice':adv, 'n_sims':N_sims})
+            st.download_button("📄 DESCARGAR PDF OFICIAL", pdf_data, file_name=f"Reporte_{ticker}.pdf", mime="application/pdf")
