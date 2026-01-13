@@ -46,7 +46,9 @@ st.sidebar.divider()
 dias_proyeccion = st.sidebar.slider("Días Futuros", 15, 365, 30)
 n_escenarios = st.sidebar.selectbox("Simulaciones", [1000, 5000, 10000], index=1)
 
-# --- MOTOR DE DATOS (CON LOGS TÉCNICOS) ---
+# --- MOTOR DE DATOS (CON CACHÉ ANTI-BLOQUEO) ---
+# ESTA ES LA MODIFICACIÓN CLAVE: ttl=3600 significa "recuerda esto por 1 hora"
+@st.cache_data(ttl=3600)
 def obtener_datos_completos(ticker):
     print("\n" + "="*60)
     log_terminal(f"INICIANDO PROTOCOLO DE CONEXIÓN: {ticker}")
@@ -108,7 +110,7 @@ if st.button(f"🔍 ANALIZAR {ticker} (CORRER PROCESO)", type="primary"):
         historial, metricas = obtener_datos_completos(ticker)
         
     if historial is None:
-        st.error("Error de datos.")
+        st.error("Error de datos o bloqueo de API. Intenta más tarde.")
     else:
         sigma, mu, info = metricas
         S0 = info['precio']
@@ -180,24 +182,22 @@ if st.button(f"🔍 ANALIZAR {ticker} (CORRER PROCESO)", type="primary"):
             st.plotly_chart(fig_hist, use_container_width=True)
             st.caption(f"El riesgo (VaR 95%) indica que hay un 95% de probabilidad de mantenerse sobre {var_95:.2f} {info['moneda']}")
 
-        # ---------------------------------------------------------
-        # 4. NUEVA SECCIÓN: INTERPRETACIÓN DE DATOS (PARA INVERTIR)
-        # ---------------------------------------------------------
+        # 4. SECCIÓN: INTERPRETACIÓN DE DATOS
         st.write("---")
         st.subheader("💡 Interpretación del Algoritmo (Guía de Inversión)")
         
         with st.expander("📝 LEER REPORTE DE INTERPRETACIÓN", expanded=True):
             
-            # A. Análisis de Volatilidad (Riesgo)
+            # A. Análisis de Volatilidad
             st.markdown("#### 1. Perfil de Riesgo")
             if sigma < 0.15:
                 st.success(f"🟢 **BAJO RIESGO (Volatilidad: {sigma:.1%})**: Esta acción es bastante estable. Ideal para perfiles conservadores.")
             elif sigma < 0.35:
                 st.warning(f"🟡 **RIESGO MODERADO (Volatilidad: {sigma:.1%})**: La acción tiene movimientos normales de mercado. Requiere tolerancia a subidas y bajadas.")
             else:
-                st.error(f"🔴 **ALTO RIESGO (Volatilidad: {sigma:.1%})**: ¡Cuidado! Es una acción muy volátil (tipo cripto o tech agresiva). Puedes ganar mucho o perder mucho rápido.")
+                st.error(f"🔴 **ALTO RIESGO (Volatilidad: {sigma:.1%})**: ¡Cuidado! Es una acción muy volátil. Puedes ganar mucho o perder mucho rápido.")
 
-            # B. Análisis de Probabilidad (Ganancia)
+            # B. Análisis de Probabilidad
             st.markdown("#### 2. Probabilidad Matemática")
             col_a, col_b = st.columns(2)
             
@@ -210,7 +210,7 @@ if st.button(f"🔍 ANALIZAR {ticker} (CORRER PROCESO)", type="primary"):
             else:
                 col_b.error("📉 **Desfavorable:** La tendencia histórica es bajista. Estadísticamente es probable perder valor.")
 
-            # C. Guía de Stop Loss (VaR)
+            # C. Guía de Stop Loss
             st.markdown("#### 3. Gestión de Riesgo (¿Cuándo salir?)")
             st.write(f"""
             Si decides invertir en **{info['precio']:.2f} {info['moneda']}**, el algoritmo calcula el **Valor en Riesgo (VaR 95%)** en **{var_95:.2f} {info['moneda']}**.
