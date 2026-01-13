@@ -4,221 +4,288 @@ import pandas as pd
 import plotly.graph_objects as go
 import yfinance as yf
 from datetime import datetime, timedelta
-import time
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Market Quant Dashboard Pro", layout="wide", page_icon="📈")
+# --- CONFIGURACIÓN DE LA APLICACIÓN ---
+st.set_page_config(
+    page_title="Quantitative Risk Analytics Engine", 
+    layout="wide", 
+    page_icon="📈"
+)
 
-# --- LISTA DE EMPRESAS PRINCIPALES ---
-TOP_ACCIONES = {
-    "🔍 Escribir otro ticker...": "OTRO",
-    "🇵🇪 Alicorp (Bolsa de Lima)": "ALICORC1.LM",
-    "🇺🇸 Tesla (Nasdaq)": "TSLA",
-    "🇪🇸 Repsol (Bolsa de Madrid)": "REP.MC",
-    "🇺🇸 Apple": "AAPL",
-    "🇺🇸 Amazon": "AMZN",
-    "🇺🇸 Google (Alphabet)": "GOOGL",
-    "🇺🇸 NVIDIA": "NVDA",
-    "⛏️ Buenaventura (Minera Perú)": "BVN",
-    "🏦 Credicorp (BAP)": "BAP"
+# --- CATÁLOGO DE ACTIVOS FINANCIEROS ---
+ASSET_UNIVERSE = {
+    "🔍 Entrada Manual (Ticker)": "MANUAL",
+    "🇺🇸 Tesla Inc. (TSLA)": "TSLA",
+    "🇺🇸 Apple Inc. (AAPL)": "AAPL",
+    "🇺🇸 NVIDIA Corp. (NVDA)": "NVDA",
+    "🇺🇸 Microsoft Corp. (MSFT)": "MSFT",
+    "🇺🇸 Amazon.com Inc. (AMZN)": "AMZN",
+    "🇺🇸 S&P 500 ETF (SPY)": "SPY",
+    "🥇 Gold Futures (GC=F)": "GC=F",
+    "₿ Bitcoin USD (BTC-USD)": "BTC-USD"
 }
 
-# --- FUNCIÓN DE LOGS PARA LA TERMINAL (LO QUE QUIERE DAVID) ---
-def log_terminal(mensaje):
-    """Imprime en la pantalla negra con hora exacta"""
-    hora = datetime.now().strftime("%H:%M:%S")
-    print(f"[{hora}] [INFO] {mensaje}")
+# --- SISTEMA DE LOGS (AUDITORÍA DE PROCESOS) ---
+def sys_log(message, level="INFO"):
+    """Registra eventos del sistema en la consola del servidor con timestamp."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[{timestamp}] [{level}] {message}")
 
-# --- TÍTULO ---
-st.title("📈 Tablero Financiero: Montecarlo & Volatilidad")
-st.markdown("Plataforma de predicción algorítmica y análisis de riesgo.")
+# --- TÍTULO Y ENCABEZADO ---
+st.title("📈 Quantitative Risk Analytics Engine")
+st.markdown("""
+**Sistema de Simulación Estocástica y Valoración de Riesgo de Mercado.**
+Implementación de modelos de *Movimiento Browniano Geométrico (GBM)* y *Difusión con Saltos de Merton* para la proyección de precios y cálculo de VaR.
+""")
 
-# --- BARRA LATERAL ---
-st.sidebar.header("1. Configuración")
-opcion = st.sidebar.selectbox("Empresa:", list(TOP_ACCIONES.keys()), index=2)
+# --- BARRA LATERAL: PARAMETRIZACIÓN ---
+st.sidebar.header("1. Configuración del Activo")
+selected_option = st.sidebar.selectbox("Instrumento Financiero:", list(ASSET_UNIVERSE.keys()), index=1)
 
-if TOP_ACCIONES[opcion] == "OTRO":
-    ticker = st.sidebar.text_input("Ticker manual:", value="SPY").upper()
+if ASSET_UNIVERSE[selected_option] == "MANUAL":
+    ticker = st.sidebar.text_input("Ingresar Ticker (Yahoo Finance Standard):", value="GOOGL").upper()
 else:
-    ticker = TOP_ACCIONES[opcion]
+    ticker = ASSET_UNIVERSE[selected_option]
 
 st.sidebar.divider()
-dias_proyeccion = st.sidebar.slider("Días Futuros", 15, 365, 30)
-n_escenarios = st.sidebar.selectbox("Simulaciones", [1000, 5000, 10000], index=1)
 
-# --- MOTOR DE DATOS (CON CACHÉ ANTI-BLOQUEO) ---
-# ESTA ES LA MODIFICACIÓN CLAVE: ttl=3600 significa "recuerda esto por 1 hora"
-@st.cache_data(ttl=3600)
-def obtener_datos_completos(ticker):
-    print("\n" + "="*60)
-    log_terminal(f"INICIANDO PROTOCOLO DE CONEXIÓN: {ticker}")
-    log_terminal(f"Estableciendo handshake con Yahoo Finance API v8...")
+st.sidebar.header("2. Parámetros de Simulación")
+time_horizon = st.sidebar.slider("Horizonte de Proyección (Días)", 5, 365, 30, help="Número de días bursátiles a proyectar (T).")
+n_simulations = st.sidebar.selectbox("Iteraciones Montecarlo (N)", [1000, 5000, 10000, 20000], index=1, help="Número de trayectorias aleatorias a generar.")
+
+st.sidebar.divider()
+
+# --- PARÁMETROS AVANZADOS (QUANT) ---
+st.sidebar.header("3. Ajuste de Modelo (Quant)")
+with st.sidebar.expander("⚙️ Calibración Avanzada", expanded=False):
+    st.markdown("### A. Drift (Tendencia)")
+    override_drift = st.checkbox("Sobrescribir Drift Histórico (View)")
+    manual_drift = st.slider("Drift Anual Esperado (%)", -50.0, 100.0, 10.0, step=0.5) / 100
     
-    # Descargar datos
-    stock = yf.Ticker(ticker)
-    df = stock.history(period="1y")
+    st.markdown("### B. Componente de Saltos (Merton)")
+    enable_jumps = st.checkbox("Habilitar Saltos de Poisson", value=True, help="Añade discontinuidades aleatorias al precio.")
+    jump_prob = st.slider("Probabilidad de Salto Anual (Lambda)", 0.0, 50.0, 5.0, step=1.0) / 100
+    jump_mean = st.slider("Magnitud Media del Salto (%)", -30.0, 30.0, -5.0, step=0.5) / 100
+    jump_std = st.slider("Volatilidad del Salto (%)", 0.0, 50.0, 10.0, step=1.0) / 100
     
-    if df.empty:
-        log_terminal(f"[ERROR CRÍTICO] No se recibió payload de datos.")
+    st.markdown("### C. Métricas de Riesgo")
+    confidence_level = st.selectbox("Nivel de Confianza (VaR)", [0.90, 0.95, 0.99], index=1)
+
+# --- MÓDULO DE INGESTA DE DATOS ---
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_market_data(symbol):
+    """Descarga datos históricos y calcula parámetros estadísticos base."""
+    sys_log(f"Iniciando solicitud de datos para: {symbol}")
+    try:
+        stock = yf.Ticker(symbol)
+        # Se solicitan 2 años para una varianza más robusta
+        df = stock.history(period="2y")
+        
+        if df.empty:
+            sys_log(f"ADVERTENCIA: Payload vacío para {symbol}", "WARN")
+            return None, None
+        
+        sys_log(f"Datos recibidos exitosamente: {len(df)} registros.")
+        
+        # Cálculo de Retornos Logarítmicos Continuos
+        df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
+        df.dropna(inplace=True)
+        
+        # Parámetros Anualizados (252 días bursátiles)
+        last_price = df['Close'].iloc[-1]
+        volatility = df['Log_Ret'].std() * np.sqrt(252)
+        historical_drift = df['Log_Ret'].mean() * 252
+        
+        asset_info = {
+            "price": last_price,
+            "currency": stock.info.get('currency', 'USD'),
+            "name": stock.info.get('longName', symbol)
+        }
+        
+        sys_log(f"Métricas calculadas -> Volatilidad: {volatility:.4f}, Drift Histórico: {historical_drift:.4f}")
+        return df, (volatility, historical_drift, asset_info)
+        
+    except Exception as e:
+        sys_log(f"ERROR CRÍTICO en API: {str(e)}", "ERROR")
         return None, None
-    
-    log_terminal(f"Paquete recibido: {len(df)} registros históricos (OHLCV).")
-    
-    # Cálculos matemáticos
-    log_terminal("Calculando retornos logarítmicos continuos...")
-    df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
-    
-    log_terminal("Generando matriz de Volatilidad Móvil (Rolling Window 30d)...")
-    df['Volatilidad_Movil'] = df['Log_Ret'].rolling(window=30).std() * np.sqrt(252)
-    
-    # Métricas actuales
-    precio_actual = df['Close'].iloc[-1]
-    sigma = df['Log_Ret'].std() * np.sqrt(252)
-    mu = df['Log_Ret'].mean() * 252
-    
-    log_terminal(f"Métricas procesadas -> Volatilidad: {sigma:.2%}, Drift: {mu:.2%}")
-    
-    info_extra = {
-        "precio": precio_actual,
-        "moneda": stock.info.get('currency', 'USD'),
-        "nombre": stock.info.get('longName', ticker),
-        "volumen": df['Volume'].iloc[-1]
-    }
-    return df, (sigma, mu, info_extra)
 
-def motor_montecarlo_avanzado(S0, mu, sigma, T_dias, N):
-    log_terminal(f"EJECUTANDO KERNEL ESTOCÁSTICO (GBM)...")
-    log_terminal(f"Parámetros: S0={S0:.2f}, N={N} hilos.")
+# --- MOTOR DE SIMULACIÓN (NUMPY VECTORIZADO) ---
+def run_simulation(S0, mu, sigma, T, N, dt, jumps, lambda_j, mu_j, sigma_j):
+    """
+    Ejecuta la simulación estocástica.
+    Soporta GBM estándar y Difusión con Saltos.
+    """
+    sys_log("Inicializando Kernel Estocástico...")
+    sys_log(f"Configuración: T={T}, N={N}, Jumps={jumps}")
     
-    dt = 1/252
-    rutas = np.zeros((T_dias + 1, N))
-    rutas[0] = S0
+    prices = np.zeros((T + 1, N))
+    prices[0] = S0
     
-    log_terminal("Inyectando ruido blanco gaussiano...")
-    for t in range(1, T_dias + 1):
+    for t in range(1, T + 1):
+        # 1. Componente Difusivo (Browniano)
         z = np.random.normal(0, 1, N)
-        rutas[t] = rutas[t-1] * np.exp((mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * z)
+        # Corrección de Itô para Drift: (mu - 0.5 * sigma^2)
+        diffusion_term = (mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * z
         
-    log_terminal(f"Renderizado de {N} universos paralelos completado.")
-    print("="*60 + "\n")
-    return rutas
+        # 2. Componente de Salto (Poisson)
+        jump_term = 0
+        if jumps:
+            # Poisson: Número de saltos en el intervalo dt
+            # Nota: lambda se ajusta al intervalo dt
+            n_jumps = np.random.poisson(lambda_j * dt, N)
+            
+            # Si hay saltos, calculamos su magnitud Log-Normal
+            if np.any(n_jumps > 0):
+                jump_magnitude = np.random.normal(mu_j, sigma_j, N) * n_jumps
+                jump_term = jump_magnitude
 
-# --- INTERFAZ VISUAL ---
-if st.button(f"🔍 ANALIZAR {ticker} (CORRER PROCESO)", type="primary"):
+        # Ecuación Diferencial Estocástica Discretizada
+        prices[t] = prices[t-1] * np.exp(diffusion_term + jump_term)
+        
+    sys_log("Simulación completada. Matriz de precios generada.")
+    return prices
+
+# --- CONTROLADOR PRINCIPAL ---
+if st.button(f"⚡ EJECUTAR ANÁLISIS PARA {ticker}", type="primary"):
     
-    with st.spinner("Procesando en el backend..."):
-        historial, metricas = obtener_datos_completos(ticker)
+    with st.spinner("Procesando datos y ejecutando simulación Montecarlo..."):
+        # 1. Obtención de Datos
+        historical_data, metrics = fetch_market_data(ticker)
         
-    if historial is None:
-        st.error("Error de datos o bloqueo de API. Intenta más tarde.")
+    if historical_data is None:
+        st.error("Error de conexión con el proveedor de datos de mercado. Verifique el Ticker o intente más tarde.")
     else:
-        sigma, mu, info = metricas
-        S0 = info['precio']
+        sigma_base, mu_hist, info = metrics
+        S0 = info['price']
         
-        # 1. TARJETAS DE DATOS (KPIs)
+        # 2. Configuración de Parámetros del Modelo
+        mu_final = manual_drift if override_drift else mu_hist
+        dt = 1/252  # Paso de tiempo diario
+        
+        # 3. Ejecución de la Simulación
+        simulation_results = run_simulation(
+            S0=S0,
+            mu=mu_final,
+            sigma=sigma_base,
+            T=time_horizon,
+            N=n_simulations,
+            dt=dt,
+            jumps=enable_jumps,
+            lambda_j=jump_prob,   # Intensidad anual
+            mu_j=jump_mean,       # Media del salto
+            sigma_j=jump_std      # Desv. Est. del salto
+        )
+        
+        # 4. Procesamiento de Resultados Estadísticos
+        final_prices = simulation_results[-1]
+        mean_price = np.mean(final_prices)
+        median_price = np.median(final_prices)
+        
+        # Cálculo de Riesgo (VaR & CVaR)
+        # Si confianza es 95%, buscamos el percentil 5% de la cola izquierda
+        alpha = 1 - confidence_level
+        var_value = np.percentile(final_prices, alpha * 100)
+        cvar_value = final_prices[final_prices <= var_value].mean()
+        
+        prob_positive_return = np.sum(final_prices > S0) / n_simulations
+        
+        # --- DASHBOARD DE RESULTADOS ---
+        
+        # A. Tarjetas de Métricas (KPIs)
         kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        kpi1.metric("Precio Actual", f"{info['precio']:.2f} {info['moneda']}")
-        kpi2.metric("Volatilidad Anual", f"{sigma*100:.2f}%")
-        kpi3.metric("Tendencia (Drift)", f"{mu*100:.2f}%")
-        kpi4.metric("Volumen", f"{info['volumen']:,}")
+        kpi1.metric("Precio Spot", f"{S0:.2f} {info['currency']}")
+        kpi2.metric("Volatilidad (σ)", f"{sigma_base:.2%}")
+        kpi3.metric("Drift Esperado (μ)", f"{mu_final:.2%}", delta="Manual" if override_drift else "Histórico")
+        kpi4.metric(f"VaR ({confidence_level:.0%})", f"{var_value:.2f}", delta_color="inverse")
         
-        # 2. SIMULACIÓN
-        rutas = motor_montecarlo_avanzado(S0, mu, sigma, dias_proyeccion, n_escenarios)
-        
-        # Preparar datos para gráficos y análisis
-        fechas_futuras = [historial.index[-1] + timedelta(days=x) for x in range(dias_proyeccion + 1)]
-        promedio_rutas = np.mean(rutas, axis=1)
-        precios_finales = rutas[-1]
-        
-        # Cálculos de probabilidad
-        var_95 = np.percentile(precios_finales, 5)
-        prob_ganancia = np.sum(precios_finales > S0) / n_escenarios * 100
-
         st.divider()
         
-        # 3. PESTAÑAS DE ANÁLISIS
-        tab1, tab2, tab3 = st.tabs(["📈 Gráfico Continuo", "⚡ Volatilidad", "📊 Distribución"])
+        # B. Visualización Gráfica
+        tab_sim, tab_dist, tab_data = st.tabs(["📈 Trayectorias Simuladas", "📊 Distribución & Riesgo", "📝 Resumen Técnico"])
         
-        # GRÁFICO 1: CONTINUIDAD
-        with tab1:
-            fig_main = go.Figure()
-            # Historia
-            fig_main.add_trace(go.Scatter(x=historial.index, y=historial['Close'], mode='lines', name='Histórico', line=dict(color='#00CC96', width=2)))
+        # GRÁFICO 1: TRAYECTORIAS
+        with tab_sim:
+            fig_sim = go.Figure()
             
-            # Futuro (Rutas)
-            for i in range(50): 
-                fig_main.add_trace(go.Scatter(
-                    x=fechas_futuras, 
-                    y=rutas[:, i], 
+            # Fechas futuras
+            future_dates = [historical_data.index[-1] + timedelta(days=i) for i in range(time_horizon + 1)]
+            
+            # Muestreo de rutas para optimizar renderizado (max 100 líneas visuales)
+            display_routes = 100 if n_simulations > 100 else n_simulations
+            indices = np.random.choice(n_simulations, display_routes, replace=False)
+            
+            for i in indices:
+                fig_sim.add_trace(go.Scatter(
+                    x=future_dates, 
+                    y=simulation_results[:, i], 
                     mode='lines', 
-                    showlegend=False, 
-                    opacity=0.1, 
-                    line=dict(color='white', width=0.5)
+                    line=dict(width=0.5, color='rgba(100, 200, 255, 0.2)'), # Opacidad ajustada en color string
+                    showlegend=False,
+                    hoverinfo='skip'
                 ))
-                
-            # Promedio
-            fig_main.add_trace(go.Scatter(x=fechas_futuras, y=promedio_rutas, mode='lines', name='Proyección Media', line=dict(color='orange', width=3, dash='dash')))
             
-            fig_main.update_layout(template="plotly_dark", title=f"Proyección Continua: {ticker}", height=500)
-            st.plotly_chart(fig_main, use_container_width=True)
+            # Líneas de Tendencia Central
+            fig_sim.add_trace(go.Scatter(x=future_dates, y=np.mean(simulation_results, axis=1), mode='lines', name='Media Esperada', line=dict(color='orange', width=2)))
+            fig_sim.add_trace(go.Scatter(x=future_dates, y=np.percentile(simulation_results, 5, axis=1), mode='lines', name=f'Límite Inferior {(alpha*100):.0f}%', line=dict(color='red', width=1, dash='dash')))
             
-        # GRÁFICO 2: VOLATILIDAD
-        with tab2:
-            st.subheader("Evolución del 'Nerviosismo' del Mercado")
-            fig_vol = go.Figure()
-            fig_vol.add_trace(go.Scatter(x=historial.index, y=historial['Volatilidad_Movil']*100, mode='lines', fill='tozeroy', line=dict(color='#EF553B'), name='Volatilidad 30d'))
-            fig_vol.update_layout(template="plotly_dark", title="Volatilidad Histórica Rodante (%)", height=400)
-            st.plotly_chart(fig_vol, use_container_width=True)
+            fig_sim.update_layout(
+                title=f"Proyección Estocástica: {ticker} ({time_horizon} días)",
+                xaxis_title="Fecha",
+                yaxis_title="Precio",
+                template="plotly_dark",
+                height=500
+            )
+            st.plotly_chart(fig_sim, use_container_width=True)
             
-        # GRÁFICO 3: HISTOGRAMA
-        with tab3:
+        # GRÁFICO 2: DISTRIBUCIÓN Y VaR
+        with tab_dist:
             fig_hist = go.Figure()
-            fig_hist.add_trace(go.Histogram(x=precios_finales, nbinsx=60, marker_color='#636EFA', name='Escenarios'))
+            fig_hist.add_trace(go.Histogram(
+                x=final_prices, 
+                nbinsx=100, 
+                name='Frecuencia', 
+                marker_color='#636EFA', 
+                opacity=0.7
+            ))
             
-            fig_hist.add_vline(x=S0, line_dash="dash", annotation_text="Hoy")
-            fig_hist.add_vline(x=var_95, line_color="red", annotation_text="VaR 95%")
+            # Líneas de referencia
+            fig_hist.add_vline(x=S0, line_dash="solid", line_color="white", annotation_text="Spot")
+            fig_hist.add_vline(x=var_value, line_dash="dash", line_color="red", annotation_text=f"VaR {confidence_level:.0%}")
+            fig_hist.add_vline(x=mean_price, line_dash="dash", line_color="orange", annotation_text="Media")
             
-            fig_hist.update_layout(template="plotly_dark", title="Distribución de Probabilidades", height=400)
+            fig_hist.update_layout(
+                title="Distribución de Probabilidad de Precios Finales",
+                xaxis_title="Precio Simulado",
+                yaxis_title="Frecuencia",
+                template="plotly_dark",
+                height=450
+            )
             st.plotly_chart(fig_hist, use_container_width=True)
-            st.caption(f"El riesgo (VaR 95%) indica que hay un 95% de probabilidad de mantenerse sobre {var_95:.2f} {info['moneda']}")
-
-        # 4. SECCIÓN: INTERPRETACIÓN DE DATOS
-        st.write("---")
-        st.subheader("💡 Interpretación del Algoritmo (Guía de Inversión)")
-        
-        with st.expander("📝 LEER REPORTE DE INTERPRETACIÓN", expanded=True):
             
-            # A. Análisis de Volatilidad
-            st.markdown("#### 1. Perfil de Riesgo")
-            if sigma < 0.15:
-                st.success(f"🟢 **BAJO RIESGO (Volatilidad: {sigma:.1%})**: Esta acción es bastante estable. Ideal para perfiles conservadores.")
-            elif sigma < 0.35:
-                st.warning(f"🟡 **RIESGO MODERADO (Volatilidad: {sigma:.1%})**: La acción tiene movimientos normales de mercado. Requiere tolerancia a subidas y bajadas.")
-            else:
-                st.error(f"🔴 **ALTO RIESGO (Volatilidad: {sigma:.1%})**: ¡Cuidado! Es una acción muy volátil. Puedes ganar mucho o perder mucho rápido.")
-
-            # B. Análisis de Probabilidad
-            st.markdown("#### 2. Probabilidad Matemática")
-            col_a, col_b = st.columns(2)
+            # Análisis textual profesional
+            st.markdown(f"""
+            #### 🛡️ Informe de Riesgo Cuantitativo
             
-            col_a.metric("Probabilidad de Ganancia", f"{prob_ganancia:.1f}%")
+            El análisis de **{n_simulations:,} escenarios** proyecta los siguientes resultados para un horizonte de **{time_horizon} días**:
             
-            if prob_ganancia > 65:
-                col_b.info("🚀 **Favorable:** El algoritmo sugiere una alta probabilidad de subida basada en la tendencia histórica.")
-            elif prob_ganancia > 50:
-                col_b.warning("⚖️ **Incierto:** Es casi como lanzar una moneda (50/50). La tendencia no es clara.")
-            else:
-                col_b.error("📉 **Desfavorable:** La tendencia histórica es bajista. Estadísticamente es probable perder valor.")
-
-            # C. Guía de Stop Loss
-            st.markdown("#### 3. Gestión de Riesgo (¿Cuándo salir?)")
-            st.write(f"""
-            Si decides invertir en **{info['precio']:.2f} {info['moneda']}**, el algoritmo calcula el **Valor en Riesgo (VaR 95%)** en **{var_95:.2f} {info['moneda']}**.
-            
-            👉 **Consejo de Trading:** Si el precio baja hasta **{var_95:.2f}**, deberías considerar vender para cortar pérdidas, ya que rompería el escenario estadístico normal.
+            * **Probabilidad de Retorno Positivo:** {prob_positive_return:.1%}
+            * **Value at Risk (VaR {confidence_level:.0%}):** Con un nivel de confianza del {confidence_level:.0%}, se estima que la pérdida máxima no excederá un precio suelo de **{var_value:.2f} {info['currency']}**.
+            * **Conditional VaR (CVaR):** En el escenario de colapso extremo (peor {(1-confidence_level):.0%} de los casos), el precio promedio esperado es **{cvar_value:.2f} {info['currency']}**.
             """)
             
-            st.caption("⚠️ Nota: Esto es una simulación matemática basada en el pasado. No es asesoramiento financiero certificado.")
+        # TAB 3: RESUMEN TÉCNICO
+        with tab_data:
+            st.write("#### Parámetros del Modelo")
+            st.json({
+                "Modelo": "Merton Jump Diffusion" if enable_jumps else "Geometric Brownian Motion",
+                "Precio Inicial (S0)": S0,
+                "Drift Anual (mu)": mu_final,
+                "Volatilidad (sigma)": sigma_base,
+                "Saltos Activos": enable_jumps,
+                "Intensidad Saltos (Lambda)": jump_prob if enable_jumps else 0,
+                "Horizonte (T)": time_horizon,
+                "Iteraciones (N)": n_simulations
+            })
 
 else:
-    st.info("👈 Selecciona una empresa y presiona el botón para iniciar el análisis cuántico.")
+    st.info("ℹ️ Seleccione los parámetros en la barra lateral y presione 'EJECUTAR ANÁLISIS' para iniciar el cálculo.")
