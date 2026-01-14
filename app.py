@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from fpdf import FPDF
 import requests
 import time
-import pandas_datareader.data as web
+import io  # <--- NUEVO IMPORT NECESARIO
 
 # --- CONFIGURACIÓN DE LA APLICACIÓN ---
 st.set_page_config(
@@ -83,34 +83,34 @@ ASSET_UNIVERSE = {
     "₿ Bitcoin USD (BTC-USD)": "BTC-USD"
 }
 
-# --- INGESTA HÍBRIDA (YAHOO + STOOQ) ---
+# --- INGESTA HÍBRIDA (YAHOO + STOOQ DIRECTO) ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_market_data(symbol):
     """
     Sistema de Ingesta Híbrido:
-    1. Intenta Yahoo Finance (Metadata rica).
-    2. Si falla, activa Failover a Stooq (Datos puros).
+    1. Yahoo Finance (Metadata rica).
+    2. Stooq Direct CSV (Sin librería rota pandas_datareader).
     """
     
     data_source = "None"
     df = pd.DataFrame()
     asset_info = {}
     
+    # Configurar sesión global
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
+    session = requests.Session()
+    session.headers.update(headers)
+    
     # ---------------------------------------------------------
     # INTENTO 1: YAHOO FINANCE (PRIMARIO)
     # ---------------------------------------------------------
     try:
         print(f"[INFO] Intentando conectar con Yahoo Finance para {symbol}...")
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
-        session = requests.Session()
-        session.headers.update(headers)
-        
         stock = yf.Ticker(symbol, session=session)
         df = stock.history(period="2y")
         
         if not df.empty:
             data_source = "Yahoo Finance"
-            # Intentar capturar metadata real
             try:
                 info_curr = stock.info.get('currency', 'USD')
                 info_name = stock.info.get('longName', symbol)
@@ -124,25 +124,33 @@ def fetch_market_data(symbol):
         print(f"[WARN] Yahoo Finance falló: {e}")
 
     # ---------------------------------------------------------
-    # INTENTO 2: STOOQ (SECUNDARIO / FAILOVER)
+    # INTENTO 2: STOOQ DIRECTO (SECUNDARIO)
     # ---------------------------------------------------------
     if df.empty:
-        print(f"[INFO] Activando Protocolo Failover: STOOQ para {symbol}...")
+        print(f"[INFO] Activando Protocolo Failover: STOOQ DIRECTO para {symbol}...")
         try:
-            # Stooq a veces usa códigos distintos, pero para US stocks suele ser igual
-            # Definimos fechas manualmente para 2 años
-            start = datetime.now() - timedelta(days=730)
-            end = datetime.now()
+            # Stooq usa tickers como 'AAPL.US' o 'BTC-USD'. Intentamos sufijo si falla el base.
+            tickers_to_try = [symbol, f"{symbol}.US"]
             
-            df = web.DataReader(symbol, 'stooq', start, end)
-            
-            if not df.empty:
-                data_source = "Stooq (Backup)"
-                # Stooq devuelve los datos al revés (más nuevo arriba), ordenamos:
-                df = df.sort_index()
-                # Stooq no da metadata, usamos defaults
-                asset_info = {"currency": "USD", "name": f"{symbol} (Data from Stooq)"}
+            for t_try in tickers_to_try:
+                # Descarga directa del CSV de Stooq (sin pandas_datareader)
+                url = f"https://stooq.com/q/d/l/?s={t_try}&i=d"
+                response = session.get(url)
                 
+                if response.status_code == 200 and "No data" not in response.text:
+                    df_stooq = pd.read_csv(io.StringIO(response.text), index_col="Date", parse_dates=True)
+                    
+                    if not df_stooq.empty:
+                        df = df_stooq
+                        # Filtrar últimos 2 años
+                        start_date = datetime.now() - timedelta(days=730)
+                        df = df[df.index >= start_date]
+                        
+                        data_source = "Stooq (Backup)"
+                        df = df.sort_index()
+                        asset_info = {"currency": "USD", "name": f"{symbol} (Data from Stooq)"}
+                        break 
+                        
         except Exception as e:
             print(f"[ERROR] Stooq también falló: {e}")
 
@@ -150,10 +158,10 @@ def fetch_market_data(symbol):
     # PROCESAMIENTO FINAL
     # ---------------------------------------------------------
     if df.empty:
-        return None, None, None # Fallo total
+        return None, None, None 
 
     try:
-        # Normalización de columnas (Stooq a veces usa minúsculas)
+        # Normalización de columnas (Stooq usa mayúsculas, Yahoo Title Case)
         df.columns = [c.capitalize() for c in df.columns]
         
         if 'Close' not in df.columns:
@@ -167,7 +175,6 @@ def fetch_market_data(symbol):
         volatility = df['Log_Ret'].std() * np.sqrt(252)
         historical_drift = df['Log_Ret'].mean() * 252
         
-        # Completar info
         asset_info["price"] = float(last_price)
         if "currency" not in asset_info: asset_info["currency"] = "USD"
         if "name" not in asset_info: asset_info["name"] = symbol
@@ -175,7 +182,7 @@ def fetch_market_data(symbol):
         return df, (volatility, historical_drift, asset_info), data_source
 
     except Exception as e:
-        print(f"[ERROR] Error matemático en procesamiento: {e}")
+        print(f"[ERROR] Error matemático: {e}")
         return None, None, None
 
 # --- MOTOR DE SIMULACIÓN ---
@@ -221,7 +228,6 @@ with st.sidebar.expander("⚙️ Calibración", expanded=False):
 # Main Execution
 if st.button(f"⚡ EJECUTAR ANÁLISIS PARA {ticker}", type="primary"):
     with st.spinner("Estableciendo conexión con proveedores de datos..."):
-        # Llamada a la función híbrida
         hist, metrics, source = fetch_market_data(ticker)
     
     if hist is None:
@@ -231,11 +237,10 @@ if st.button(f"⚡ EJECUTAR ANÁLISIS PARA {ticker}", type="primary"):
         S0 = info['price']
         mu_f = m_drift if ov_drift else mu_h
         
-        # Mensaje de éxito indicando la fuente
         if source == "Yahoo Finance":
             st.success(f"✅ Datos obtenidos vía Yahoo Finance API (Principal).")
         else:
-            st.warning(f"⚠️ Yahoo Finance no responde. Datos obtenidos vía Stooq (Respaldo). La metadata puede ser limitada.")
+            st.warning(f"⚠️ Yahoo Finance no responde. Datos obtenidos vía Stooq (Respaldo).")
 
         sims = run_simulation(S0, mu_f, sigma, T_days, N_sims, 1/252, jumps, j_prob, j_mean, j_std)
         final_P = sims[-1]
@@ -246,7 +251,6 @@ if st.button(f"⚡ EJECUTAR ANÁLISIS PARA {ticker}", type="primary"):
         CVaR = final_P[final_P <= VaR].mean()
         P_succ = np.sum(final_P > S0) / N_sims
         
-        # Recomendación
         if P_succ > 0.65: sig, adv = "BULLISH", "Tendencia alcista fuerte detectada."
         elif P_succ < 0.35: sig, adv = "BEARISH", "Tendencia bajista. Precaución."
         else: sig, adv = "NEUTRAL", "Mercado lateral sin tendencia clara."
