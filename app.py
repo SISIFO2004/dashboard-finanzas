@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from fpdf import FPDF
 import requests
 import time
-import io  # <--- NUEVO IMPORT NECESARIO
+import io  # <--- IMPORTANTE: Para leer el CSV de Stooq
 
 # --- CONFIGURACIÓN DE LA APLICACIÓN ---
 st.set_page_config(
@@ -83,29 +83,28 @@ ASSET_UNIVERSE = {
     "₿ Bitcoin USD (BTC-USD)": "BTC-USD"
 }
 
-# --- INGESTA HÍBRIDA (YAHOO + STOOQ DIRECTO) ---
+# --- INGESTA HÍBRIDA (YAHOO + STOOQ MANUAL) ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_market_data(symbol):
     """
-    Sistema de Ingesta Híbrido:
-    1. Yahoo Finance (Metadata rica).
-    2. Stooq Direct CSV (Sin librería rota pandas_datareader).
+    Sistema Híbrido:
+    1. Yahoo Finance (Principal).
+    2. Stooq vía HTTP Directo (Respaldo sin librerías rotas).
     """
     
     data_source = "None"
     df = pd.DataFrame()
     asset_info = {}
     
-    # Configurar sesión global
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
+    # Headers para simular navegador
     session = requests.Session()
-    session.headers.update(headers)
+    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'})
     
     # ---------------------------------------------------------
-    # INTENTO 1: YAHOO FINANCE (PRIMARIO)
+    # 1. INTENTO PRIMARIO: YAHOO FINANCE
     # ---------------------------------------------------------
     try:
-        print(f"[INFO] Intentando conectar con Yahoo Finance para {symbol}...")
+        print(f"[INFO] Conectando a Yahoo Finance: {symbol}...")
         stock = yf.Ticker(symbol, session=session)
         df = stock.history(period="2y")
         
@@ -121,23 +120,26 @@ def fetch_market_data(symbol):
             asset_info = {"currency": info_curr, "name": info_name}
 
     except Exception as e:
-        print(f"[WARN] Yahoo Finance falló: {e}")
+        print(f"[WARN] Yahoo falló: {e}")
 
     # ---------------------------------------------------------
-    # INTENTO 2: STOOQ DIRECTO (SECUNDARIO)
+    # 2. INTENTO SECUNDARIO: STOOQ (Descarga Directa)
     # ---------------------------------------------------------
     if df.empty:
-        print(f"[INFO] Activando Protocolo Failover: STOOQ DIRECTO para {symbol}...")
+        print(f"[INFO] Failover activo: Descargando CSV de Stooq para {symbol}...")
         try:
-            # Stooq usa tickers como 'AAPL.US' o 'BTC-USD'. Intentamos sufijo si falla el base.
+            # Stooq suele usar sufijo .US para acciones de EEUU (ej: AAPL.US)
+            # Probamos el ticker tal cual y con sufijo .US
             tickers_to_try = [symbol, f"{symbol}.US"]
             
             for t_try in tickers_to_try:
-                # Descarga directa del CSV de Stooq (sin pandas_datareader)
+                # URL de descarga directa de CSV de Stooq
                 url = f"https://stooq.com/q/d/l/?s={t_try}&i=d"
                 response = session.get(url)
                 
+                # Verificar si descargó un CSV válido (Stooq devuelve 'No data' en texto si falla)
                 if response.status_code == 200 and "No data" not in response.text:
+                    # Leemos el CSV desde la memoria
                     df_stooq = pd.read_csv(io.StringIO(response.text), index_col="Date", parse_dates=True)
                     
                     if not df_stooq.empty:
@@ -147,27 +149,27 @@ def fetch_market_data(symbol):
                         df = df[df.index >= start_date]
                         
                         data_source = "Stooq (Backup)"
-                        df = df.sort_index()
+                        df = df.sort_index() # Ordenar cronológicamente
                         asset_info = {"currency": "USD", "name": f"{symbol} (Data from Stooq)"}
-                        break 
+                        break # ¡Éxito! Dejar de probar tickers
                         
         except Exception as e:
-            print(f"[ERROR] Stooq también falló: {e}")
+            print(f"[ERROR] Stooq directo falló: {e}")
 
     # ---------------------------------------------------------
-    # PROCESAMIENTO FINAL
+    # PROCESAMIENTO
     # ---------------------------------------------------------
     if df.empty:
         return None, None, None 
 
     try:
-        # Normalización de columnas (Stooq usa mayúsculas, Yahoo Title Case)
+        # Normalizar nombres de columnas (Stooq usa mayúsculas, Yahoo Title Case)
         df.columns = [c.capitalize() for c in df.columns]
         
         if 'Close' not in df.columns:
             return None, None, None
 
-        # Cálculos matemáticos
+        # Matemáticas financieras
         df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
         df.dropna(inplace=True)
         
