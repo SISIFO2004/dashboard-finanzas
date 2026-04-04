@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 from fpdf import FPDF
 
 # ==============================================================================
-# FASE 1: MOTOR DE INGESTA HÍBRIDO (CON SOPORTE PARA API KEY PROFESIONAL)
+# FASE 1: MOTOR DE INGESTA HÍBRIDO (SOPORTE AVANZADO ACCIONES/CRIPTOS)
 # ==============================================================================
 
 def generate_synthetic_data(ticker: str, days: int = 500) -> pd.DataFrame:
@@ -35,24 +35,43 @@ def generate_synthetic_data(ticker: str, days: int = 500) -> pd.DataFrame:
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_financial_data(ticker: str, api_key: str = "") -> pd.DataFrame:
     # ---------------------------------------------------------
-    # Intento 1: Proveedor Profesional (Alpha Vantage) si hay Key
+    # Intento 1: Alpha Vantage (Diferenciando Cripto vs Acciones)
     # ---------------------------------------------------------
     if api_key:
         try:
-            url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
-            response = requests.get(url, timeout=10)
-            data = response.json()
-            if "Time Series (Daily)" in data:
-                ts = data["Time Series (Daily)"]
-                df = pd.DataFrame.from_dict(ts, orient='index')
-                df = df.rename(columns={'4. close': 'Close'})
-                df['Close'] = df['Close'].astype(float)
-                df.index = pd.to_datetime(df.index)
-                df = df.sort_index().tail(504) # Últimos 2 años
-                if not df.empty:
-                    df = df[['Close']].copy()
-                    df['Source'] = 'Alpha Vantage (API Oficial)'
-                    return df
+            if "-USD" in ticker:
+                # Lógica especial para Criptomonedas
+                crypto_sym = ticker.replace("-USD", "")
+                url = f"https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_DAILY&symbol={crypto_sym}&market=USD&apikey={api_key}"
+                response = requests.get(url, timeout=10)
+                data = response.json()
+                if "Time Series (Digital Currency Daily)" in data:
+                    ts = data["Time Series (Digital Currency Daily)"]
+                    df = pd.DataFrame.from_dict(ts, orient='index')
+                    df = df.rename(columns={'4a. close (USD)': 'Close'})
+                    df['Close'] = df['Close'].astype(float)
+                    df.index = pd.to_datetime(df.index)
+                    df = df.sort_index().tail(504)
+                    if not df.empty:
+                        df = df[['Close']].copy()
+                        df['Source'] = 'Alpha Vantage (API Crypto Oficial)'
+                        return df
+            else:
+                # Lógica para Acciones/ETFs
+                url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
+                response = requests.get(url, timeout=10)
+                data = response.json()
+                if "Time Series (Daily)" in data:
+                    ts = data["Time Series (Daily)"]
+                    df = pd.DataFrame.from_dict(ts, orient='index')
+                    df = df.rename(columns={'4. close': 'Close'})
+                    df['Close'] = df['Close'].astype(float)
+                    df.index = pd.to_datetime(df.index)
+                    df = df.sort_index().tail(504)
+                    if not df.empty:
+                        df = df[['Close']].copy()
+                        df['Source'] = 'Alpha Vantage (API Acciones Oficial)'
+                        return df
         except Exception: pass
 
     # ---------------------------------------------------------
@@ -88,8 +107,7 @@ def load_financial_data(ticker: str, api_key: str = "") -> pd.DataFrame:
     # ---------------------------------------------------------
     # Intento 4: Datos Sintéticos
     # ---------------------------------------------------------
-    st.warning(f"⚠️ Red bloqueada por proveedores gratuitos. Activando 'Modo Contingencia' con datos sintéticos para {ticker}.")
-    return generate_synthetic_data(ticker, days=500)
+    return pd.DataFrame() # Devolvemos vacío para que Streamlit maneje el aviso fuera de caché
 
 # ==============================================================================
 # FASE 2: MOTOR MATEMÁTICO ESTOCÁSTICO Y UI
@@ -127,13 +145,11 @@ def render_dashboard():
     st.markdown("Motor de simulaciones estocásticas con conexión API profesional y redundancia de proveedores.")
 
     st.sidebar.header("1. Conexión de Datos")
-    # Nuevo campo para la API Key
-    api_key_input = st.sidebar.text_input("Alpha Vantage API Key (Opcional):", type="password", help="Ingresa una clave gratuita de Alpha Vantage para evitar bloqueos de red.")
+    api_key_input = st.sidebar.text_input("Alpha Vantage API Key (Opcional):", type="password", help="Ingresa una clave gratuita de Alpha Vantage para evitar bloqueos.")
     
     st.sidebar.divider()
     st.sidebar.header("2. Selección de Activo")
     
-    # LISTA MASIVA DE ACTIVOS
     ASSET_UNIVERSE = {
         "🔍 Entrada Manual (Ticker)": "MANUAL",
         "--- TECNOLÓGICAS ---": "MANUAL",
@@ -158,8 +174,6 @@ def render_dashboard():
     }
     
     selected_asset = st.sidebar.selectbox("Seleccione un Activo:", list(ASSET_UNIVERSE.keys()))
-    
-    # Prevenir que seleccionen los separadores visuales
     if "---" in selected_asset:
         st.warning("Por favor selecciona un activo válido de la lista.")
         st.stop()
@@ -183,13 +197,17 @@ def render_dashboard():
         mu_j = st.number_input("Media del Salto (μ_J):", value=-0.05, step=0.01)
         sigma_j = st.number_input("Volatilidad del Salto (σ_J):", value=0.05, step=0.01)
 
-    # Ingesta con API Key opcional
-    df_hist = load_financial_data(ticker, api_key_input)
+    with st.spinner("Conectando con el mercado..."):
+        df_hist = load_financial_data(ticker, api_key_input)
+    
+    # Manejo visual del éxito o fallo
     if df_hist.empty:
-        st.error(f"Imposible obtener datos para {ticker}.")
-        st.stop()
-        
-    st.write(f"***Conexión Activa:** `{df_hist['Source'].iloc[0]}`*")
+        # Fallaron todos los métodos. Mostramos el aviso amarillo y generamos sintéticos.
+        st.warning(f"⚠️ Red bloqueada por proveedores gratuitos o Clave API expirada. Activando 'Modo Contingencia' para {ticker}.")
+        df_hist = generate_synthetic_data(ticker, days=500)
+    else:
+        # Hubo conexión exitosa. El aviso amarillo no aparece. Mostramos en verde el proveedor.
+        st.success(f"✅ Conexión Activa: {df_hist['Source'].iloc[0]}")
     
     daily_returns = df_hist['Close'].pct_change().dropna()
     hist_mu = daily_returns.mean() * 252
@@ -211,7 +229,7 @@ def render_dashboard():
     col4.metric(f"CVaR", f"${cvar_price:,.2f}", f"{cvar_loss*100:.1f}%", delta_color="inverse")
     
     estado, recomendacion = generate_directive(prob_pos)
-    if estado == "Bullish": st.success(f"**Directriz [{estado}]:** {recomendacion}")
+    if estado == "Bullish": st.info(f"**Directriz [{estado}]:** {recomendacion}")
     elif estado == "Bearish": st.error(f"**Directriz [{estado}]:** {recomendacion}")
     else: st.warning(f"**Directriz [{estado}]:** {recomendacion}")
 
