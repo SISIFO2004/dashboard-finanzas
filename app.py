@@ -272,7 +272,7 @@ def render_dashboard():
     }
 
 # ==============================================================================
-# FASE 3: GENERACIÓN PDF
+# FASE 3: GENERACIÓN PDF (CORREGIDA PARA UNICODE)
 # ==============================================================================
 
 def create_pdf_report(data: dict) -> bytes:
@@ -289,35 +289,52 @@ def create_pdf_report(data: dict) -> bytes:
     pdf.set_fill_color(240, 240, 240)
     pdf.cell(0, 8, txt=" 1. SIMULACION DE PORTAFOLIO", ln=True, fill=True)
     pdf.set_font("Arial", '', 10)
-    pdf.cell(0, 6, txt=f"   - Capital Inicial: {data['capital_inicial']:,.2f} {data['moneda']}", ln=True)
-    pdf.cell(0, 6, txt=f"   - Tamaño de Posicion: {data['acciones']:.4f} shares (Precio: ${data['S0']:.2f})", ln=True)
-    pdf.cell(0, 6, txt=f"   - Capital Proyectado (Mediana): {data['capital_esperado']:,.2f} {data['moneda']}", ln=True)
-    pdf.cell(0, 6, txt=f"   - Exposicion Maxima al VaR: {data['capital_var']:,.2f} {data['moneda']} (Perdida esperada: {data['var_loss']*100:.1f}%)", ln=True)
+    
+    # Sanitizamos la moneda para evitar el símbolo € que rompe fpdf
+    moneda_pdf = "EUR" if data['moneda'] == "EUR" else "USD"
+    
+    pdf.cell(0, 6, txt=f"   - Capital Inicial: {data['capital_inicial']:,.2f} {moneda_pdf}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Tamano de Posicion: {data['acciones']:.4f} shares (Precio: ${data['S0']:.2f})", ln=True)
+    pdf.cell(0, 6, txt=f"   - Capital Proyectado (Mediana): {data['capital_esperado']:,.2f} {moneda_pdf}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Exposicion Maxima al VaR: {data['capital_var']:,.2f} {moneda_pdf} (Perdida esperada: {data['var_loss']*100:.1f}%)", ln=True)
     pdf.ln(5)
 
     pdf.set_font("Arial", 'B', 11)
     pdf.cell(0, 8, txt=" 2. DIRECTRIZ ESTRATEGICA", ln=True, fill=True)
     pdf.set_font("Arial", 'B', 10)
-    pdf.cell(0, 6, txt=f"   ESTADO: {data['estado'].upper()}", ln=True)
+    
+    # Limpiamos acentos y caracteres especiales del estado
+    estado_limpio = data['estado'].upper().replace('Ó', 'O').replace('Í', 'I')
+    pdf.cell(0, 6, txt=f"   ESTADO: {estado_limpio}", ln=True)
     pdf.set_font("Arial", '', 10)
     
-    clean_text = data['recomendacion'].replace('**', '')
+    # Sanitizamos el texto: quitamos negritas (**) y cambiamos viñetas (•) por guiones (-)
+    clean_text = data['recomendacion'].replace('**', '').replace('•', '-')
+    
+    # Limpiamos tildes comunes para evitar errores latin-1
+    sustituciones = {'á':'a', 'é':'e', 'í':'i', 'ó':'o', 'ú':'u', 'Á':'A', 'É':'E', 'Í':'I', 'Ó':'O', 'Ú':'U'}
+    for acento, sin_acento in sustituciones.items():
+        clean_text = clean_text.replace(acento, sin_acento)
+
     for p in clean_text.split('\n'):
         if p.strip():
             pdf.multi_cell(0, 6, txt="   " + p.strip())
             pdf.ln(1)
 
-    return pdf.output(dest='S').encode('latin-1')
+    # El encode de fpdf requiere ignore o replace para sobrevivir a caracteres rebeldes
+    pdf_string = pdf.output(dest='S')
+    return pdf_string.encode('latin-1', errors='replace')
 
 if __name__ == "__main__":
     report_data = render_dashboard()
     if report_data:
+        # ATENCIÓN: El botón ahora vive en la barra lateral izquierda
         with st.sidebar:
             st.markdown("---")
             with st.spinner("Generando PDF..."):
                 pdf_bytes = create_pdf_report(report_data)
                 st.download_button(
-                    label="📥 Descargar PDF",
+                    label="📥 Descargar PDF Analítico",
                     data=pdf_bytes,
                     file_name=f"Quant_Report_{report_data['ticker']}.pdf",
                     mime="application/pdf",
