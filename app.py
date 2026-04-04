@@ -12,15 +12,15 @@ import plotly.graph_objects as go
 from fpdf import FPDF
 
 # ==============================================================================
-# CONFIGURACIÓN DE MEMORIA CACHÉ AVANZADA
+# CONFIGURACIÓN DE MEMORIA CACHÉ
 # ==============================================================================
 session = requests_cache.CachedSession('mercado_cache', expire_after=86400)
 session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
 })
 
 # ==============================================================================
-# FASE 1: MOTOR DE INGESTA ULTRA-RESILIENTE (Tiingo + YahooQuery + Caché)
+# FASE 1: MOTOR DE INGESTA RESILIENTE
 # ==============================================================================
 
 def generate_synthetic_data(ticker: str, days: int = 500) -> pd.DataFrame:
@@ -65,7 +65,7 @@ def load_financial_data(ticker: str, tiingo_key: str = "") -> pd.DataFrame:
                     df = df.rename(columns={'close': 'Close'}).sort_index().tail(504)
                     df_final = df[['Close']].copy()
                     cache_status = "Caché Local" if response.from_cache else "Internet"
-                    df_final['Source'] = f'Tiingo API Oficial ({cache_status})'
+                    df_final['Source'] = f'Tiingo API ({cache_status})'
                     return df_final
         except Exception: pass
 
@@ -77,7 +77,7 @@ def load_financial_data(ticker: str, tiingo_key: str = "") -> pd.DataFrame:
             df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
             df = df.set_index('date').rename(columns={'close': 'Close'})
             df_final = df[['Close']].copy()
-            df_final['Source'] = 'YahooQuery Backend'
+            df_final['Source'] = 'YahooQuery'
             return df_final
     except Exception: pass
 
@@ -86,14 +86,14 @@ def load_financial_data(ticker: str, tiingo_key: str = "") -> pd.DataFrame:
         df = stock.history(period="2y")
         if not df.empty and 'Close' in df.columns:
             df = df[['Close']].copy()
-            df['Source'] = 'Yahoo Finance Tradicional'
+            df['Source'] = 'Yahoo Finance'
             return df
     except Exception: pass
 
     return pd.DataFrame() 
 
 # ==============================================================================
-# FASE 2: MOTOR MATEMÁTICO ESTOCÁSTICO Y UI
+# FASE 2: MOTOR MATEMÁTICO ESTOCÁSTICO
 # ==============================================================================
 
 def run_montecarlo_jumps(S0, mu, sigma, days, simulations, lambda_j, mu_j, sigma_j):
@@ -115,97 +115,97 @@ def calculate_risk_metrics(S0, final_prices, conf_level):
     cvar_price = np.mean(final_prices[final_prices <= var_price])
     if np.isnan(cvar_price): cvar_price = var_price
     cvar_loss_pct = (cvar_price - S0) / S0
-    return prob_positive, var_price, var_loss_pct, cvar_price, cvar_loss_pct
+    # Usamos la mediana de los precios finales como la expectativa más realista para distribuciones sesgadas
+    median_price = np.median(final_prices) 
+    return prob_positive, var_price, var_loss_pct, cvar_price, cvar_loss_pct, median_price
 
-# --- NUEVO MOTOR DE GENERACIÓN DE DIRECTRICES PROFUNDAS ---
+# --- DIRECTRICES CONCISAS Y PRECISAS ---
 def generate_directive(prob_pos, sigma, var_loss_pct, days):
-    vol_text = "Alta Volatilidad" if sigma > 0.35 else "Volatilidad Moderada/Estable"
-    riesgo_text = f"El modelo proyecta una exposición a pérdidas máximas esperadas (VaR) del {abs(var_loss_pct)*100:.1f}% para el horizonte de {days} días."
+    vol = sigma * 100
+    riesgo = abs(var_loss_pct) * 100
 
     if prob_pos > 0.65:
-        estado = "Bullish (Alcista)"
-        rec = f"**Análisis Estocástico:** El modelo muestra una fuerte asimetría positiva ({prob_pos*100:.1f}% de probabilidad de éxito). Las simulaciones indican que la tendencia estructural (Drift) está superando significativamente al ruido del mercado, proyectando un escenario de expansión de precios.\n\n"
-        rec += f"**Estrategia Recomendada:** Se sugiere un enfoque de Momentum o la apertura de posiciones en largo. Para portafolios avanzados, es un entorno propicio para la compra de Call Options o el incremento escalonado de la exposición neta al activo.\n\n"
-        rec += f"**Gestión de Riesgo:** Régimen de {vol_text}. {riesgo_text} Se recomienda fijar un 'Trailing Stop-Loss' (Stop de arrastre) justo por debajo del límite del VaR para proteger las ganancias acumuladas sin asfixiar las fluctuaciones normales del mercado."
+        estado = "Bullish"
+        rec = f"• **Tendencia:** Fuerte asimetría positiva ({prob_pos*100:.1f}% prob. éxito).\n"
+        rec += f"• **Acción Recomendada:** Operar posiciones en largo o aplicar estrategias de Momentum.\n"
+        rec += f"• **Gestión de Riesgo:** Volatilidad del {vol:.1f}%. Fije un Stop-Loss dinámico por debajo de la barrera VaR ({riesgo:.1f}%)."
     elif prob_pos < 0.35:
-        estado = "Bearish (Bajista)"
-        rec = f"**Análisis Estocástico:** El campo probabilístico detecta un deterioro agudo en la acción del precio ({100 - prob_pos*100:.1f}% de probabilidad de caída). El peso de los retornos negativos domina las proyecciones de Montecarlo, indicando una tendencia descendente sostenida.\n\n"
-        rec += f"**Estrategia Recomendada:** Prioridad Absoluta de Defensa. Se recomienda una reducción drástica del apalancamiento. Es el momento estadístico para implementar coberturas (Hedging) mediante la compra de Put Options o abrir posiciones en corto si el perfil de inversión lo permite.\n\n"
-        rec += f"**Gestión de Riesgo:** Entorno de {vol_text}. {riesgo_text} Cualquier posición comprada restante debe contar con un Stop-Loss rígido y ajustado al milímetro. Evitar promediar a la baja (comprar más mientras cae)."
+        estado = "Bearish"
+        rec = f"• **Tendencia:** Dominancia de retornos negativos ({100 - prob_pos*100:.1f}% prob. de pérdida).\n"
+        rec += f"• **Acción Recomendada:** Reducir exposición. Implementar coberturas (Puts) o posiciones en corto.\n"
+        rec += f"• **Gestión de Riesgo:** Peligro estructural. Todo soporte técnico por encima del VaR ({riesgo:.1f}%) es frágil. Cierre agresivo de pérdidas."
     else:
-        estado = "Neutral (Consolidación / Incertidumbre)"
-        rec = f"**Análisis Estocástico:** La distribución de trayectorias es altamente simétrica. No existe una dominancia clara entre fuerzas compradoras y vendedoras. El activo se encuentra en una fase de alta entropía direccional o rango lateral.\n\n"
-        rec += f"**Estrategia Recomendada:** Evitar apuestas direccionales agresivas. El entorno estadístico favorece estrategias neutrales al mercado (Delta-Neutral) como Iron Condors o Straddles. Para inversores pasivos, es zona de acumulación conservadora vía Dollar-Cost Averaging (DCA).\n\n"
-        rec += f"**Gestión de Riesgo:** Régimen de {vol_text}. {riesgo_text} La estrategia de supervivencia aquí es operar los extremos: acumular cerca de la línea del VaR (soporte estadístico) y tomar beneficios en las desviaciones estándar superiores."
+        estado = "Neutral"
+        rec = f"• **Tendencia:** Distribución simétrica (Rango lateral / Entropía direccional).\n"
+        rec += f"• **Acción Recomendada:** Estrategias Delta-Neutral (Iron Condors) o acumulación pasiva (DCA).\n"
+        rec += f"• **Gestión de Riesgo:** Comprar debilidad en el límite VaR ({riesgo:.1f}%) y vender fortaleza en desviaciones estándar superiores."
 
     return estado, rec
+
+# ==============================================================================
+# UI Y DASHBOARD
+# ==============================================================================
 
 def render_dashboard():
     st.set_page_config(page_title="Quant Risk Engine", layout="wide", page_icon="📈")
     st.title("📊 Quantitative Risk Analytics Engine")
-    st.markdown("Motor de simulaciones con Arquitectura de Evasión (YahooQuery) y Caché Persistente.")
 
-    st.sidebar.header("1. Conexión de Datos")
-    tiingo_key_input = st.sidebar.text_input("Tiingo API Key (Opcional - 500/día):", type="password", help="Tiingo ofrece 500 descargas diarias gratis. Regístrate en tiingo.com.")
+    # --- BARRA LATERAL ---
+    st.sidebar.header("1. Datos y Conexión")
+    tiingo_key_input = st.sidebar.text_input("Tiingo API Key (Opcional):", type="password")
     
     st.sidebar.divider()
     st.sidebar.header("2. Selección de Activo")
-    
     ASSET_UNIVERSE = {
         "🔍 Entrada Manual (Ticker)": "MANUAL",
         "--- TECNOLÓGICAS ---": "MANUAL",
         "🇺🇸 Apple Inc. (AAPL)": "AAPL",
         "🇺🇸 Microsoft (MSFT)": "MSFT",
         "🇺🇸 NVIDIA (NVDA)": "NVDA",
-        "🇺🇸 Tesla (TSLA)": "TSLA",
-        "🇺🇸 Meta Platforms (META)": "META",
-        "🇺🇸 Alphabet/Google (GOOGL)": "GOOGL",
-        "🇺🇸 Amazon (AMZN)": "AMZN",
         "--- CRIPTOMONEDAS ---": "MANUAL",
         "₿ Bitcoin (BTC-USD)": "BTC-USD",
         "⟠ Ethereum (ETH-USD)": "ETH-USD",
-        "◎ Solana (SOL-USD)": "SOL-USD",
-        "--- ÍNDICES Y ETFS ---": "MANUAL",
-        "📊 S&P 500 ETF (SPY)": "SPY",
-        "📊 Nasdaq 100 ETF (QQQ)": "QQQ",
         "--- MATERIAS PRIMAS ---": "MANUAL",
-        "🥇 Oro (GC=F)": "GC=F",
-        "🥈 Plata (SI=F)": "SI=F",
-        "🛢️ Petróleo Crudo (CL=F)": "CL=F"
+        "🥇 Oro (GC=F)": "GC=F"
     }
     
     selected_asset = st.sidebar.selectbox("Seleccione un Activo:", list(ASSET_UNIVERSE.keys()))
     if "---" in selected_asset:
-        st.warning("Por favor selecciona un activo válido de la lista.")
+        st.warning("Selecciona un activo válido.")
         st.stop()
         
-    custom_asset = st.sidebar.text_input("...o ingrese Ticker Manual (Ej: AMD, INTC):", "")
+    custom_asset = st.sidebar.text_input("...o ingrese Ticker Manual:", "")
     ticker = custom_asset.upper() if custom_asset else ASSET_UNIVERSE[selected_asset]
     
+    # --- NUEVO MÓDULO DE INVERSIÓN ---
     st.sidebar.divider()
-    st.sidebar.header("3. Simulación")
-    days_to_project = st.sidebar.slider("Días Hábiles a Proyectar:", 10, 252, 60)
-    simulations = {"1k": 1000, "5k": 5000, "10k": 10000}[st.sidebar.selectbox("Número de Simulaciones:", ["1k", "5k", "10k"])]
+    st.sidebar.header("3. Simulación de Capital")
+    moneda_str = st.sidebar.selectbox("Moneda Base:", ["USD ($)", "EUR (€)"])
+    simbolo = "$" if "USD" in moneda_str else "€"
+    # Usamos código de moneda explícito para evitar problemas de codificación en el PDF
+    codigo_moneda = "USD" if "USD" in moneda_str else "EUR" 
     
-    st.sidebar.divider()
-    st.sidebar.header("4. Ajustes Cuantitativos")
-    override_drift = st.sidebar.checkbox("Forzar Drift (μ) Manual")
-    manual_drift = st.sidebar.number_input("Drift Anualizado (μ):", value=0.10, step=0.01) if override_drift else None
-    conf_level = st.sidebar.slider("Nivel de Confianza VaR (%):", 90.0, 99.9, 95.0, 0.1)
-    
-    with st.sidebar.expander("📉 Calibración de Cisnes Negros (Merton Jumps)", expanded=False):
-        lambda_j = st.slider("Prob. Saltos/Año (λ):", 0.0, 10.0, 2.0)
-        mu_j = st.number_input("Media del Salto (μ_J):", value=-0.05, step=0.01)
-        sigma_j = st.number_input("Volatilidad del Salto (σ_J):", value=0.05, step=0.01)
+    capital_inicial = st.sidebar.number_input(f"Capital a Invertir ({simbolo}):", min_value=10.0, value=10000.0, step=1000.0)
 
-    with st.spinner("Descargando datos financieros (Buscando en Caché primero)..."):
-        df_hist = load_financial_data(ticker, tiingo_key_input)
-    
+    st.sidebar.divider()
+    st.sidebar.header("4. Parámetros del Modelo")
+    days_to_project = st.sidebar.slider("Días a Proyectar:", 10, 252, 60)
+    simulations = {"1k": 1000, "5k": 5000, "10k": 10000}[st.sidebar.selectbox("Simulaciones:", ["1k", "5k", "10k"])]
+    conf_level = st.sidebar.slider("Nivel VaR (%):", 90.0, 99.9, 95.0, 0.1)
+
+    with st.sidebar.expander("📉 Calibración Avanzada (Jumps & Drift)", expanded=False):
+        override_drift = st.checkbox("Forzar Drift (μ) Manual")
+        manual_drift = st.number_input("Drift Anualizado (μ):", value=0.10, step=0.01) if override_drift else None
+        lambda_j = st.slider("Prob. Saltos/Año (λ):", 0.0, 10.0, 2.0)
+        mu_j = st.number_input("Media Salto (μ_J):", value=-0.05, step=0.01)
+        sigma_j = st.number_input("Vol. Salto (σ_J):", value=0.05, step=0.01)
+
+    # --- EJECUCIÓN CORE ---
+    df_hist = load_financial_data(ticker, tiingo_key_input)
     if df_hist.empty:
-        st.warning(f"⚠️ Servidores bloqueados permanentemente. Activando 'Modo Contingencia' para {ticker}.")
         df_hist = generate_synthetic_data(ticker, days=500)
     else:
-        st.success(f"✅ Conexión Activa: {df_hist['Source'].iloc[0]}")
+        st.caption(f"Conexión: {df_hist['Source'].iloc[0]}")
     
     daily_returns = df_hist['Close'].pct_change().dropna()
     hist_mu = daily_returns.mean() * 252
@@ -215,110 +215,97 @@ def render_dashboard():
     mu = manual_drift if override_drift else hist_mu
     sigma = hist_sigma
     
-    with st.spinner("🚀 Computando campo estocástico multidimensional..."):
+    with st.spinner("🚀 Computando..."):
         paths = run_montecarlo_jumps(S0, mu, sigma, days_to_project, simulations, lambda_j, mu_j, sigma_j)
         final_prices = paths[-1, :]
-        prob_pos, var_price, var_loss, cvar_price, cvar_loss = calculate_risk_metrics(S0, final_prices, conf_level)
+        prob_pos, var_price, var_loss, cvar_price, cvar_loss, median_price = calculate_risk_metrics(S0, final_prices, conf_level)
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Precio Spot (S₀)", f"${S0:,.2f}")
-    col2.metric("Probabilidad de Éxito", f"{prob_pos*100:.1f}%")
-    col3.metric(f"VaR ({conf_level}%)", f"${var_price:,.2f}", f"{var_loss*100:.1f}%", delta_color="inverse")
-    col4.metric(f"CVaR", f"${cvar_price:,.2f}", f"{cvar_loss*100:.1f}%", delta_color="inverse")
-    
+    # --- CÁLCULOS DE PORTAFOLIO REAL ---
+    acciones_adquiridas = capital_inicial / S0
+    capital_esperado = acciones_adquiridas * median_price
+    capital_var = acciones_adquiridas * var_price
+    rendimiento_esperado = capital_esperado - capital_inicial
+
+    # --- KPIs DE LA ACCIÓN ---
+    st.subheader(f"Métricas del Activo: {ticker}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Precio Spot (S₀)", f"${S0:,.2f}")
+    c2.metric("Probabilidad de Éxito", f"{prob_pos*100:.1f}%")
+    c3.metric(f"Precio VaR ({conf_level}%)", f"${var_price:,.2f}", f"{var_loss*100:.1f}%", delta_color="inverse")
+    c4.metric("Volatilidad Anual (σ)", f"{sigma*100:.1f}%")
+
+    # --- KPIs DEL PORTAFOLIO (NUEVO) ---
+    st.markdown("---")
+    st.subheader(f"Proyección de Inversión ({codigo_moneda}) a {days_to_project} días")
+    p1, p2, p3 = st.columns(3)
+    p1.metric("Capital Inicial", f"{simbolo}{capital_inicial:,.2f}", f"{acciones_adquiridas:.4f} shares", delta_color="off")
+    p2.metric("Valor Proyectado (Mediana)", f"{simbolo}{capital_esperado:,.2f}", f"{simbolo}{rendimiento_esperado:,.2f} Retorno Esperado")
+    p3.metric("Capital en Riesgo Máximo (VaR)", f"{simbolo}{capital_var:,.2f}", f"{simbolo}{capital_var - capital_inicial:,.2f} Exposición Crítica", delta_color="inverse")
+
+    # --- DIRECTRICES ---
     estado, recomendacion = generate_directive(prob_pos, sigma, var_loss, days_to_project)
     
-    # Renderizado estilizado de la recomendación en UI
     st.markdown("---")
-    if estado.startswith("Bullish"):
-        st.success(f"### 📈 Directriz Estratégica: {estado}")
-    elif estado.startswith("Bearish"):
-        st.error(f"### 📉 Directriz Estratégica: {estado}")
-    else:
-        st.warning(f"### ⚖️ Directriz Estratégica: {estado}")
-        
+    if estado == "Bullish": st.success(f"### 🟢 Estado: {estado}")
+    elif estado == "Bearish": st.error(f"### 🔴 Estado: {estado}")
+    else: st.warning(f"### 🟡 Estado: {estado}")
     st.markdown(recomendacion)
     st.markdown("---")
 
+    # --- GRÁFICO ---
     fig = go.Figure()
     visual_paths = paths[:, :100]
     time_axis = np.arange(days_to_project + 1)
-    
     for i in range(visual_paths.shape[1]):
         fig.add_trace(go.Scatter(x=time_axis, y=visual_paths[:, i], mode='lines', line=dict(color='rgba(0, 100, 255, 0.1)'), showlegend=False, hoverinfo='skip'))
-        
-    fig.add_trace(go.Scatter(x=[0, days_to_project], y=[S0, S0], mode='lines', name='Precio Actual (S₀)', line=dict(color='black', width=2, dash='dash')))
-    fig.add_trace(go.Scatter(x=[0, days_to_project], y=[var_price, var_price], mode='lines', name=f'VaR Limite ({conf_level}%)', line=dict(color='red', width=2, dash='dot')))
-                             
-    fig.update_layout(title=f"Simulación Montecarlo ({simulations} trayectorias) - Muestra visual: 100", xaxis_title="Días a Futuro", yaxis_title="Precio Simulado ($)", template="plotly_white", height=500)
+    fig.add_trace(go.Scatter(x=[0, days_to_project], y=[S0, S0], mode='lines', name='Precio Spot', line=dict(color='black', width=2, dash='dash')))
+    fig.add_trace(go.Scatter(x=[0, days_to_project], y=[var_price, var_price], mode='lines', name=f'VaR ({conf_level}%)', line=dict(color='red', width=2, dash='dot')))
+    fig.update_layout(title=f"Simulación Montecarlo ({simulations} trayectorias)", height=400, template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
 
     return {
-        "ticker": ticker, "S0": S0, "mu": mu, "sigma": sigma, "days": days_to_project,
-        "simulations": simulations, "prob_pos": prob_pos, "var_price": var_price, 
-        "cvar_price": cvar_price, "estado": estado, "recomendacion": recomendacion
+        "ticker": ticker, "S0": S0, "sigma": sigma, "days": days_to_project, "simulations": simulations,
+        "prob_pos": prob_pos, "var_price": var_price, "var_loss": var_loss,
+        "capital_inicial": capital_inicial, "moneda": codigo_moneda, "acciones": acciones_adquiridas,
+        "capital_esperado": capital_esperado, "capital_var": capital_var,
+        "estado": estado, "recomendacion": recomendacion
     }
 
 # ==============================================================================
-# FASE 3: GENERACIÓN DE REPORTES PDF EN MEMORIA (ESTRUCTURA DE CONSULTORÍA)
+# FASE 3: GENERACIÓN PDF
 # ==============================================================================
 
-def create_pdf_report(report_data: dict) -> bytes:
+def create_pdf_report(data: dict) -> bytes:
     pdf = FPDF()
     pdf.add_page()
     
-    # Título Principal
     pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0, 10, txt="REPORTE DE RIESGO CUANTITATIVO", ln=True, align='C')
+    pdf.cell(0, 10, txt=f"REPORTE CUANTITATIVO: {data['ticker']}", ln=True, align='C')
     pdf.set_font("Arial", 'I', 10)
-    pdf.cell(0, 8, txt=f"Generado el: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True, align='C')
+    pdf.cell(0, 8, txt=f"Fecha: {datetime.datetime.now().strftime('%Y-%m-%d')}", ln=True, align='C')
     pdf.ln(5)
 
-    # 1. Parámetros
-    pdf.set_font("Arial", 'B', 12)
-    pdf.set_fill_color(240, 240, 240)
-    pdf.cell(0, 8, txt=" 1. PARAMETROS DEL ACTIVO Y MODELO", ln=True, fill=True)
-    pdf.set_font("Arial", '', 11)
-    pdf.cell(0, 7, txt=f"   - Activo Analizado (Ticker): {report_data['ticker']}", ln=True)
-    pdf.cell(0, 7, txt=f"   - Precio Spot Actual (S0): ${report_data['S0']:.2f}", ln=True)
-    pdf.cell(0, 7, txt=f"   - Volatilidad Anualizada (Sigma): {report_data['sigma']*100:.2f}%", ln=True)
-    pdf.cell(0, 7, txt=f"   - Horizonte de Proyeccion: {report_data['days']} dias habiles", ln=True)
-    pdf.cell(0, 7, txt=f"   - Simulaciones (Montecarlo): {report_data['simulations']}", ln=True)
-    pdf.ln(5)
-
-    # 2. Riesgo
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 8, txt=" 2. METRICAS DE RIESGO ESTOCASTICO", ln=True, fill=True)
-    pdf.set_font("Arial", '', 11)
-    pdf.cell(0, 7, txt=f"   - Probabilidad de Retorno Positivo: {report_data['prob_pos']*100:.2f}%", ln=True)
-    pdf.cell(0, 7, txt=f"   - Value at Risk (VaR): ${report_data['var_price']:.2f}", ln=True)
-    pdf.cell(0, 7, txt=f"   - Conditional VaR (CVaR): ${report_data['cvar_price']:.2f}", ln=True)
-    pdf.ln(5)
-
-    # 3. Conclusiones (Texto extendido)
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 8, txt=" 3. ANALISIS Y DIRECTRIZ ESTRATEGICA", ln=True, fill=True)
-    pdf.ln(2)
-    
     pdf.set_font("Arial", 'B', 11)
-    pdf.cell(0, 7, txt=f"ESTADO DEL MERCADO: {report_data['estado']}", ln=True)
-    pdf.ln(2)
-    
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(0, 8, txt=" 1. SIMULACION DE PORTAFOLIO", ln=True, fill=True)
     pdf.set_font("Arial", '', 10)
-    # Limpiar formato Markdown (**) para que FPDF no lo imprima feo
-    clean_text = report_data['recomendacion'].replace('**', '')
-    
-    # Imprimir párrafo por párrafo
-    paragraphs = clean_text.split('\n\n')
-    for p in paragraphs:
-        if p.strip():
-            pdf.multi_cell(0, 6, txt=p.strip())
-            pdf.ln(3)
-
+    pdf.cell(0, 6, txt=f"   - Capital Inicial: {data['capital_inicial']:,.2f} {data['moneda']}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Tamaño de Posicion: {data['acciones']:.4f} shares (Precio: ${data['S0']:.2f})", ln=True)
+    pdf.cell(0, 6, txt=f"   - Capital Proyectado (Mediana): {data['capital_esperado']:,.2f} {data['moneda']}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Exposicion Maxima al VaR: {data['capital_var']:,.2f} {data['moneda']} (Perdida esperada: {data['var_loss']*100:.1f}%)", ln=True)
     pdf.ln(5)
-    pdf.set_font("Arial", 'I', 8)
-    pdf.set_text_color(120, 120, 120)
-    pdf.multi_cell(0, 4, txt="DISCLAIMER: Este reporte es generado mediante algoritmos cuantitativos (Movimiento Browniano Geometrico y Saltos de Merton) con fines academicos y de analisis de escenarios. No constituye asesoria financiera ni recomendacion de compra/venta. El mercado posee variables exogenas imposibles de modelar matematicamente con precision absoluta.")
+
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 8, txt=" 2. DIRECTRIZ ESTRATEGICA", ln=True, fill=True)
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(0, 6, txt=f"   ESTADO: {data['estado'].upper()}", ln=True)
+    pdf.set_font("Arial", '', 10)
+    
+    clean_text = data['recomendacion'].replace('**', '')
+    for p in clean_text.split('\n'):
+        if p.strip():
+            pdf.multi_cell(0, 6, txt="   " + p.strip())
+            pdf.ln(1)
 
     return pdf.output(dest='S').encode('latin-1')
 
@@ -327,13 +314,12 @@ if __name__ == "__main__":
     if report_data:
         with st.sidebar:
             st.markdown("---")
-            st.subheader("📄 Reporte Ejecutivo")
             with st.spinner("Generando PDF..."):
                 pdf_bytes = create_pdf_report(report_data)
                 st.download_button(
-                    label="📥 Descargar PDF Analítico",
+                    label="📥 Descargar PDF",
                     data=pdf_bytes,
-                    file_name=f"Quant_Risk_Report_{report_data['ticker']}.pdf",
+                    file_name=f"Quant_Report_{report_data['ticker']}.pdf",
                     mime="application/pdf",
                     type="primary"
                 )
