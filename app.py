@@ -2,7 +2,9 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from yahooquery import Ticker as YQTicker
 import requests
+import requests_cache
 import io
 import datetime
 from datetime import timedelta
@@ -10,7 +12,17 @@ import plotly.graph_objects as go
 from fpdf import FPDF
 
 # ==============================================================================
-# FASE 1: MOTOR DE INGESTA HÍBRIDO (SOPORTE AVANZADO ACCIONES/CRIPTOS)
+# CONFIGURACIÓN DE MEMORIA CACHÉ AVANZADA
+# ==============================================================================
+# Esto crea una base de datos local que dura 24 horas. 
+# Evita que repitas descargas y te baneen las APIs.
+session = requests_cache.CachedSession('mercado_cache', expire_after=86400)
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+})
+
+# ==============================================================================
+# FASE 1: MOTOR DE INGESTA ULTRA-RESILIENTE (Tiingo + YahooQuery + Caché)
 # ==============================================================================
 
 def generate_synthetic_data(ticker: str, days: int = 500) -> pd.DataFrame:
@@ -29,85 +41,83 @@ def generate_synthetic_data(ticker: str, days: int = 500) -> pd.DataFrame:
     dates = pd.date_range(start=start_date, periods=days, freq='B')
     df = pd.DataFrame(index=dates)
     df['Close'] = prices
-    df['Source'] = 'Sintético (Modo Failsafe)'
+    df['Source'] = 'Sintético (Modo Contingencia)'
     return df
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_financial_data(ticker: str, api_key: str = "") -> pd.DataFrame:
-    # ---------------------------------------------------------
-    # Intento 1: Alpha Vantage (Diferenciando Cripto vs Acciones)
-    # ---------------------------------------------------------
-    if api_key:
-        try:
-            if "-USD" in ticker:
-                # Lógica especial para Criptomonedas
-                crypto_sym = ticker.replace("-USD", "")
-                url = f"https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_DAILY&symbol={crypto_sym}&market=USD&apikey={api_key}"
-                response = requests.get(url, timeout=10)
-                data = response.json()
-                if "Time Series (Digital Currency Daily)" in data:
-                    ts = data["Time Series (Digital Currency Daily)"]
-                    df = pd.DataFrame.from_dict(ts, orient='index')
-                    df = df.rename(columns={'4a. close (USD)': 'Close'})
-                    df['Close'] = df['Close'].astype(float)
-                    df.index = pd.to_datetime(df.index)
-                    df = df.sort_index().tail(504)
-                    if not df.empty:
-                        df = df[['Close']].copy()
-                        df['Source'] = 'Alpha Vantage (API Crypto Oficial)'
-                        return df
-            else:
-                # Lógica para Acciones/ETFs
-                url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
-                response = requests.get(url, timeout=10)
-                data = response.json()
-                if "Time Series (Daily)" in data:
-                    ts = data["Time Series (Daily)"]
-                    df = pd.DataFrame.from_dict(ts, orient='index')
-                    df = df.rename(columns={'4. close': 'Close'})
-                    df['Close'] = df['Close'].astype(float)
-                    df.index = pd.to_datetime(df.index)
-                    df = df.sort_index().tail(504)
-                    if not df.empty:
-                        df = df[['Close']].copy()
-                        df['Source'] = 'Alpha Vantage (API Acciones Oficial)'
-                        return df
-        except Exception: pass
+def load_financial_data(ticker: str, tiingo_key: str = "") -> pd.DataFrame:
+    
+    # Limpieza del Ticker para compatibilidad entre APIs
+    yf_ticker = ticker
+    t_ticker = ticker.replace("-USD", "") if "USD" in ticker else ticker
 
     # ---------------------------------------------------------
-    # Intento 2: Yahoo Finance (Enmascarado)
+    # Intento 1: Tiingo API (500 gratis/día) - Si el usuario provee clave
+    # ---------------------------------------------------------
+    if tiingo_key:
+        try:
+            if "USD" in ticker:
+                # Endpoint para Criptomonedas en Tiingo
+                url = f"https://api.tiingo.com/tiingo/crypto/prices?tickers={t_ticker}usd&resampleFreq=1day&token={tiingo_key}"
+            else:
+                # Endpoint para Acciones en Tiingo
+                start_date = (datetime.datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
+                url = f"https://api.tiingo.com/tiingo/daily/{t_ticker}/prices?startDate={start_date}&token={tiingo_key}"
+            
+            response = session.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if len(data) > 0:
+                    # Parsear JSON de Tiingo
+                    if "USD" in ticker:
+                        df = pd.DataFrame(data[0]['priceData'])
+                    else:
+                        df = pd.DataFrame(data)
+                    df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
+                    df.set_index('date', inplace=True)
+                    df = df.rename(columns={'close': 'Close'})
+                    df = df.sort_index().tail(504)
+                    
+                    df_final = df[['Close']].copy()
+                    # Verificar si la data vino de la caché local o de internet
+                    cache_status = "Caché Local" if response.from_cache else "Internet"
+                    df_final['Source'] = f'Tiingo API Oficial ({cache_status})'
+                    return df_final
+        except Exception as e: pass
+
+    # ---------------------------------------------------------
+    # Intento 2: YahooQuery (Evasión de bloqueos de yfinance)
     # ---------------------------------------------------------
     try:
-        session = requests.Session()
-        session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0.0.0 Safari/537.36'})
-        yf_ticker = yf.Ticker(ticker, session=session)
-        df = yf_ticker.history(period="2y")
-        if not df.empty and 'Close' in df.columns:
-            df = df[['Close']].copy()
-            df['Source'] = 'Yahoo Finance (Masked API)'
-            return df
+        yq = YQTicker(yf_ticker, session=session)
+        df = yq.history(period="2y")
+        if not df.empty and isinstance(df, pd.DataFrame) and 'close' in df.columns:
+            df = df.reset_index()
+            df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
+            df = df.set_index('date')
+            df = df.rename(columns={'close': 'Close'})
+            
+            df_final = df[['Close']].copy()
+            df_final['Source'] = 'YahooQuery Backend'
+            return df_final
     except Exception: pass
 
     # ---------------------------------------------------------
-    # Intento 3: Stooq Directo (Fallback)
+    # Intento 3: Yfinance clásico (Con Memoria Caché)
     # ---------------------------------------------------------
     try:
-        tickers_to_try = [ticker, f"{ticker}.US"]
-        for t_try in tickers_to_try:
-            stooq_url = f"https://stooq.com/q/d/l/?s={t_try}&i=d"
-            response = requests.get(stooq_url, timeout=10)
-            if response.status_code == 200 and "Date" in response.text:
-                df = pd.read_csv(io.StringIO(response.text), index_col='Date', parse_dates=True).sort_index().tail(504)
-                if not df.empty and 'Close' in df.columns:
-                    df = df[['Close']].copy()
-                    df['Source'] = 'Stooq Direct HTTP'
-                    return df
+        stock = yf.Ticker(yf_ticker, session=session)
+        df = stock.history(period="2y")
+        if not df.empty and 'Close' in df.columns:
+            df = df[['Close']].copy()
+            df['Source'] = 'Yahoo Finance Tradicional'
+            return df
     except Exception: pass
 
     # ---------------------------------------------------------
     # Intento 4: Datos Sintéticos
     # ---------------------------------------------------------
-    return pd.DataFrame() # Devolvemos vacío para que Streamlit maneje el aviso fuera de caché
+    return pd.DataFrame() 
 
 # ==============================================================================
 # FASE 2: MOTOR MATEMÁTICO ESTOCÁSTICO Y UI
@@ -142,10 +152,10 @@ def generate_directive(prob_positive):
 def render_dashboard():
     st.set_page_config(page_title="Quant Risk Engine", layout="wide", page_icon="📈")
     st.title("📊 Quantitative Risk Analytics Engine")
-    st.markdown("Motor de simulaciones estocásticas con conexión API profesional y redundancia de proveedores.")
+    st.markdown("Motor de simulaciones con Arquitectura de Evasión (YahooQuery) y Caché Persistente.")
 
     st.sidebar.header("1. Conexión de Datos")
-    api_key_input = st.sidebar.text_input("Alpha Vantage API Key (Opcional):", type="password", help="Ingresa una clave gratuita de Alpha Vantage para evitar bloqueos.")
+    tiingo_key_input = st.sidebar.text_input("Tiingo API Key (Opcional - 500/día):", type="password", help="Tiingo ofrece 500 descargas diarias gratis. Regístrate en tiingo.com.")
     
     st.sidebar.divider()
     st.sidebar.header("2. Selección de Activo")
@@ -197,16 +207,13 @@ def render_dashboard():
         mu_j = st.number_input("Media del Salto (μ_J):", value=-0.05, step=0.01)
         sigma_j = st.number_input("Volatilidad del Salto (σ_J):", value=0.05, step=0.01)
 
-    with st.spinner("Conectando con el mercado..."):
-        df_hist = load_financial_data(ticker, api_key_input)
+    with st.spinner("Descargando datos financieros (Buscando en Caché primero)..."):
+        df_hist = load_financial_data(ticker, tiingo_key_input)
     
-    # Manejo visual del éxito o fallo
     if df_hist.empty:
-        # Fallaron todos los métodos. Mostramos el aviso amarillo y generamos sintéticos.
-        st.warning(f"⚠️ Red bloqueada por proveedores gratuitos o Clave API expirada. Activando 'Modo Contingencia' para {ticker}.")
+        st.warning(f"⚠️ Servidores bloqueados permanentemente. Activando 'Modo Contingencia' para {ticker}.")
         df_hist = generate_synthetic_data(ticker, days=500)
     else:
-        # Hubo conexión exitosa. El aviso amarillo no aparece. Mostramos en verde el proveedor.
         st.success(f"✅ Conexión Activa: {df_hist['Source'].iloc[0]}")
     
     daily_returns = df_hist['Close'].pct_change().dropna()
@@ -217,7 +224,7 @@ def render_dashboard():
     mu = manual_drift if override_drift else hist_mu
     sigma = hist_sigma
     
-    with st.spinner("🚀 Computando campo estocástico..."):
+    with st.spinner("🚀 Computando campo estocástico multidimensional..."):
         paths = run_montecarlo_jumps(S0, mu, sigma, days_to_project, simulations, lambda_j, mu_j, sigma_j)
         final_prices = paths[-1, :]
         prob_pos, var_price, var_loss, cvar_price, cvar_loss = calculate_risk_metrics(S0, final_prices, conf_level)
