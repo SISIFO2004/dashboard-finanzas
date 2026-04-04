@@ -270,7 +270,6 @@ def render_dashboard():
         "capital_esperado": capital_esperado, "capital_var": capital_var,
         "estado": estado, "recomendacion": recomendacion
     }
-
 # ==============================================================================
 # FASE 3: GENERACIÓN PDF (CORREGIDA PARA UNICODE)
 # ==============================================================================
