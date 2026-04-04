@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 from fpdf import FPDF
 
 # ==============================================================================
-# FASE 1: MOTOR DE INGESTA HÍBRIDO Y RESILIENTE
+# FASE 1: MOTOR DE INGESTA HÍBRIDO (CON SOPORTE PARA API KEY PROFESIONAL)
 # ==============================================================================
 
 def generate_synthetic_data(ticker: str, days: int = 500) -> pd.DataFrame:
@@ -33,8 +33,31 @@ def generate_synthetic_data(ticker: str, days: int = 500) -> pd.DataFrame:
     return df
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_financial_data(ticker: str) -> pd.DataFrame:
-    # Intento 1: Yahoo Finance
+def load_financial_data(ticker: str, api_key: str = "") -> pd.DataFrame:
+    # ---------------------------------------------------------
+    # Intento 1: Proveedor Profesional (Alpha Vantage) si hay Key
+    # ---------------------------------------------------------
+    if api_key:
+        try:
+            url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={api_key}&outputsize=full"
+            response = requests.get(url, timeout=10)
+            data = response.json()
+            if "Time Series (Daily)" in data:
+                ts = data["Time Series (Daily)"]
+                df = pd.DataFrame.from_dict(ts, orient='index')
+                df = df.rename(columns={'4. close': 'Close'})
+                df['Close'] = df['Close'].astype(float)
+                df.index = pd.to_datetime(df.index)
+                df = df.sort_index().tail(504) # Últimos 2 años
+                if not df.empty:
+                    df = df[['Close']].copy()
+                    df['Source'] = 'Alpha Vantage (API Oficial)'
+                    return df
+        except Exception: pass
+
+    # ---------------------------------------------------------
+    # Intento 2: Yahoo Finance (Enmascarado)
+    # ---------------------------------------------------------
     try:
         session = requests.Session()
         session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0.0.0 Safari/537.36'})
@@ -46,7 +69,9 @@ def load_financial_data(ticker: str) -> pd.DataFrame:
             return df
     except Exception: pass
 
-    # Intento 2: Stooq Directo (Con parche .US)
+    # ---------------------------------------------------------
+    # Intento 3: Stooq Directo (Fallback)
+    # ---------------------------------------------------------
     try:
         tickers_to_try = [ticker, f"{ticker}.US"]
         for t_try in tickers_to_try:
@@ -60,12 +85,14 @@ def load_financial_data(ticker: str) -> pd.DataFrame:
                     return df
     except Exception: pass
 
-    # Intento 3: Sintético
-    st.warning(f"⚠️ Red bloqueada por proveedores. Activando 'Degradación Graciosa' con datos sintéticos para {ticker}.")
+    # ---------------------------------------------------------
+    # Intento 4: Datos Sintéticos
+    # ---------------------------------------------------------
+    st.warning(f"⚠️ Red bloqueada por proveedores gratuitos. Activando 'Modo Contingencia' con datos sintéticos para {ticker}.")
     return generate_synthetic_data(ticker, days=500)
 
 # ==============================================================================
-# FASE 2: MOTOR MATEMÁTICO ESTOCÁSTICO Y ESTRUCTURA DE STREAMLIT (UI)
+# FASE 2: MOTOR MATEMÁTICO ESTOCÁSTICO Y UI
 # ==============================================================================
 
 def run_montecarlo_jumps(S0, mu, sigma, days, simulations, lambda_j, mu_j, sigma_j):
@@ -91,39 +118,78 @@ def calculate_risk_metrics(S0, final_prices, conf_level):
 
 def generate_directive(prob_positive):
     if prob_positive > 0.65: return "Bullish", "Sesgo Alcista Fuerte. Considere estrategias de Momentum. Mantener Stop-Loss holgado."
-    elif prob_positive < 0.35: return "Bearish", "Sesgo Bajista Peligroso. Prioridad Absoluta: Estrategias de Hedging o reducción de exposición. Ajustar Stop-Loss."
+    elif prob_positive < 0.35: return "Bearish", "Sesgo Bajista Peligroso. Prioridad Absoluta: Estrategias de Hedging o reducción de exposición."
     else: return "Neutral", "Distribución no direccional. Recomendado: Estrategias Delta-Neutral o Dollar-Cost Averaging."
 
 def render_dashboard():
     st.set_page_config(page_title="Quant Risk Engine", layout="wide", page_icon="📈")
     st.title("📊 Quantitative Risk Analytics Engine")
-    st.markdown("Motor de simulaciones de Montecarlo con Movimiento Browniano Geométrico y Difusión de Saltos de Merton.")
+    st.markdown("Motor de simulaciones estocásticas con conexión API profesional y redundancia de proveedores.")
 
-    st.sidebar.header("⚙️ Parámetros del Modelo")
-    asset_list =["AAPL", "MSFT", "TSLA", "SPY", "BTC-USD", "GC=F"]
-    selected_asset = st.sidebar.selectbox("Seleccione un Activo:", asset_list)
-    custom_asset = st.sidebar.text_input("...o ingrese un Ticker Manual:", "")
-    ticker = custom_asset.upper() if custom_asset else selected_asset
+    st.sidebar.header("1. Conexión de Datos")
+    # Nuevo campo para la API Key
+    api_key_input = st.sidebar.text_input("Alpha Vantage API Key (Opcional):", type="password", help="Ingresa una clave gratuita de Alpha Vantage para evitar bloqueos de red.")
     
+    st.sidebar.divider()
+    st.sidebar.header("2. Selección de Activo")
+    
+    # LISTA MASIVA DE ACTIVOS
+    ASSET_UNIVERSE = {
+        "🔍 Entrada Manual (Ticker)": "MANUAL",
+        "--- TECNOLÓGICAS ---": "MANUAL",
+        "🇺🇸 Apple Inc. (AAPL)": "AAPL",
+        "🇺🇸 Microsoft (MSFT)": "MSFT",
+        "🇺🇸 NVIDIA (NVDA)": "NVDA",
+        "🇺🇸 Tesla (TSLA)": "TSLA",
+        "🇺🇸 Meta Platforms (META)": "META",
+        "🇺🇸 Alphabet/Google (GOOGL)": "GOOGL",
+        "🇺🇸 Amazon (AMZN)": "AMZN",
+        "--- CRIPTOMONEDAS ---": "MANUAL",
+        "₿ Bitcoin (BTC-USD)": "BTC-USD",
+        "⟠ Ethereum (ETH-USD)": "ETH-USD",
+        "◎ Solana (SOL-USD)": "SOL-USD",
+        "--- ÍNDICES Y ETFS ---": "MANUAL",
+        "📊 S&P 500 ETF (SPY)": "SPY",
+        "📊 Nasdaq 100 ETF (QQQ)": "QQQ",
+        "--- MATERIAS PRIMAS ---": "MANUAL",
+        "🥇 Oro (GC=F)": "GC=F",
+        "🥈 Plata (SI=F)": "SI=F",
+        "🛢️ Petróleo Crudo (CL=F)": "CL=F"
+    }
+    
+    selected_asset = st.sidebar.selectbox("Seleccione un Activo:", list(ASSET_UNIVERSE.keys()))
+    
+    # Prevenir que seleccionen los separadores visuales
+    if "---" in selected_asset:
+        st.warning("Por favor selecciona un activo válido de la lista.")
+        st.stop()
+        
+    custom_asset = st.sidebar.text_input("...o ingrese Ticker Manual (Ej: AMD, INTC):", "")
+    ticker = custom_asset.upper() if custom_asset else ASSET_UNIVERSE[selected_asset]
+    
+    st.sidebar.divider()
+    st.sidebar.header("3. Simulación")
     days_to_project = st.sidebar.slider("Días Hábiles a Proyectar:", 10, 252, 60)
     simulations = {"1k": 1000, "5k": 5000, "10k": 10000}[st.sidebar.selectbox("Número de Simulaciones:", ["1k", "5k", "10k"])]
     
-    st.sidebar.subheader("🧮 Ajustes Cuantitativos")
+    st.sidebar.divider()
+    st.sidebar.header("4. Ajustes Cuantitativos")
     override_drift = st.sidebar.checkbox("Forzar Drift (μ) Manual")
     manual_drift = st.sidebar.number_input("Drift Anualizado (μ):", value=0.10, step=0.01) if override_drift else None
     conf_level = st.sidebar.slider("Nivel de Confianza VaR (%):", 90.0, 99.9, 95.0, 0.1)
     
-    st.sidebar.subheader("📉 Merton Jumps (Cisnes Negros)")
-    lambda_j = st.sidebar.slider("Prob. Saltos/Año (λ):", 0.0, 10.0, 2.0)
-    mu_j = st.sidebar.number_input("Media del Salto (μ_J):", value=-0.05, step=0.01)
-    sigma_j = st.sidebar.number_input("Volatilidad del Salto (σ_J):", value=0.05, step=0.01)
+    with st.sidebar.expander("📉 Calibración de Cisnes Negros (Merton Jumps)", expanded=False):
+        lambda_j = st.slider("Prob. Saltos/Año (λ):", 0.0, 10.0, 2.0)
+        mu_j = st.number_input("Media del Salto (μ_J):", value=-0.05, step=0.01)
+        sigma_j = st.number_input("Volatilidad del Salto (σ_J):", value=0.05, step=0.01)
 
-    df_hist = load_financial_data(ticker)
+    # Ingesta con API Key opcional
+    df_hist = load_financial_data(ticker, api_key_input)
     if df_hist.empty:
         st.error(f"Imposible obtener datos para {ticker}.")
         st.stop()
         
-    st.write(f"***Fuente de datos actual:** `{df_hist['Source'].iloc[0]}`*")
+    st.write(f"***Conexión Activa:** `{df_hist['Source'].iloc[0]}`*")
     
     daily_returns = df_hist['Close'].pct_change().dropna()
     hist_mu = daily_returns.mean() * 252
@@ -145,8 +211,6 @@ def render_dashboard():
     col4.metric(f"CVaR", f"${cvar_price:,.2f}", f"{cvar_loss*100:.1f}%", delta_color="inverse")
     
     estado, recomendacion = generate_directive(prob_pos)
-    # Colores visuales en Streamlit
-    color_map = {"Bullish": "success", "Bearish": "error", "Neutral": "warning"}
     if estado == "Bullish": st.success(f"**Directriz [{estado}]:** {recomendacion}")
     elif estado == "Bearish": st.error(f"**Directriz [{estado}]:** {recomendacion}")
     else: st.warning(f"**Directriz [{estado}]:** {recomendacion}")
@@ -213,12 +277,8 @@ def create_pdf_report(report_data: dict) -> bytes:
 
     return pdf.output(dest='S').encode('latin-1')
 
-# ==============================================================================
-# EJECUCIÓN PRINCIPAL
-# ==============================================================================
 if __name__ == "__main__":
     report_data = render_dashboard()
-    
     if report_data:
         st.markdown("---")
         st.subheader("📄 Generación de Reporte Ejecutivo")
