@@ -98,8 +98,6 @@ def load_financial_data(ticker: str, tiingo_key: str = "") -> pd.DataFrame:
 def apply_kalman_filter_dynamic(returns_array, divisor_inercia):
     """
     Filtro de Kalman 1D Dinámico (Módulo Base).
-    Calcula toda la serie de estados ocultos permitiendo que un optimizador
-    externo inyecte diferentes niveles de inercia (Q = R / D).
     """
     n = len(returns_array)
     R = np.var(returns_array)
@@ -116,11 +114,9 @@ def apply_kalman_filter_dynamic(returns_array, divisor_inercia):
     P[0] = 1.0
     
     for k in range(1, n):
-        # 1. Predicción
         x_hat_minus = x_hat[k-1]
         P_minus = P[k-1] + Q
         
-        # 2. Actualización
         K = P_minus / (P_minus + R)
         x_hat[k] = x_hat_minus + K * (returns_array[k] - x_hat_minus)
         P[k] = (1 - K) * P_minus
@@ -130,11 +126,9 @@ def apply_kalman_filter_dynamic(returns_array, divisor_inercia):
 def calculate_kalman_score(returns_array, divisor_inercia):
     """
     Función de Costo (Evaluador Cuantitativo).
-    Asigna penalizaciones al filtro basándose en Lag, SVR y Ruido Blanco.
     """
     kalman_states = apply_kalman_filter_dynamic(returns_array, divisor_inercia)
     
-    # CRITERIO 1: SVR (Smoothing Variance Ratio) - Peso 30%
     raw_vol = np.std(returns_array)
     kalman_vol = np.std(kalman_states)
     
@@ -144,7 +138,6 @@ def calculate_kalman_score(returns_array, divisor_inercia):
     svr = kalman_vol / raw_vol
     penalty_svr = abs(svr - 0.30) * 30
     
-    # CRITERIO 2: Ruido Blanco (Test Durbin-Watson) - Peso 20%
     residuals = returns_array - kalman_states
     diff_residuals = np.diff(residuals)
     
@@ -156,7 +149,6 @@ def calculate_kalman_score(returns_array, divisor_inercia):
         
     penalty_dw = abs(dw_stat - 2.0) * 20
     
-    # CRITERIO 3: LAG (Prueba de Estrés Sintética) - Peso 50%
     shock_array = np.array([0.001, 0.001, 0.001, 0.001, 0.001, -0.05, -0.05, -0.01, -0.01, -0.01])
     shock_states = apply_kalman_filter_dynamic(shock_array, divisor_inercia)
     
@@ -177,8 +169,6 @@ def calculate_kalman_score(returns_array, divisor_inercia):
 def optimize_kalman_filter(returns_array):
     """
     Optimizador Autónomo (Grid Search).
-    Prueba múltiples divisores de inercia y selecciona el que tenga la menor 
-    penalización en la función de costo.
     """
     candidatos = [10, 20, 50, 100, 200, 300, 500]
     mejor_divisor = 100
@@ -257,7 +247,7 @@ def generate_directive_common(prob_pos, sigma, var_loss_pct, days, capital, rend
     return estado, rec
 
 # ==============================================================================
-# UI Y DASHBOARD
+# UI Y DASHBOARD (INTERFAZ DE USUARIO)
 # ==============================================================================
 
 def render_dashboard():
@@ -270,22 +260,31 @@ def render_dashboard():
     
     st.sidebar.divider()
     st.sidebar.header("2. Selección de Activo")
+    
     ASSET_UNIVERSE = {
         "🔍 Entrada Manual (Ticker)": "MANUAL",
-        "--- TECNOLÓGICAS ---": "MANUAL",
+        "--- ACCIONES DE EE.UU. ---": "HEADER",
         "🇺🇸 Apple Inc. (AAPL)": "AAPL",
-        "🇺🇸 Microsoft (MSFT)": "MSFT",
-        "🇺🇸 NVIDIA (NVDA)": "NVDA",
-        "--- CRIPTOMONEDAS ---": "MANUAL",
+        "🇺🇸 Microsoft Corp. (MSFT)": "MSFT",
+        "🇺🇸 NVIDIA Corp. (NVDA)": "NVDA",
+        "🇺🇸 Amazon.com Inc. (AMZN)": "AMZN",
+        "🇺🇸 Alphabet Inc. (GOOGL)": "GOOGL",
+        "🇺🇸 Meta Platforms (META)": "META",
+        "🇺🇸 Tesla Inc. (TSLA)": "TSLA",
+        "--- CRIPTOMONEDAS ---": "HEADER",
         "₿ Bitcoin (BTC-USD)": "BTC-USD",
         "⟠ Ethereum (ETH-USD)": "ETH-USD",
-        "--- MATERIAS PRIMAS ---": "MANUAL",
-        "🥇 Oro (GC=F)": "GC=F"
+        "☀️ Solana (SOL-USD)": "SOL-USD",
+        "🔶 Binance Coin (BNB-USD)": "BNB-USD",
+        "--- MATERIAS PRIMAS ---": "HEADER",
+        "🥇 Oro (GLD - ETF Trust)": "GLD",
+        "🥈 Plata (SLV - ETF Trust)": "SLV",
+        "🛢️ Petróleo Brent (USO - ETF)": "USO"
     }
     
     selected_asset = st.sidebar.selectbox("Seleccione un Activo:", list(ASSET_UNIVERSE.keys()))
-    if "---" in selected_asset:
-        st.warning("Selecciona un activo válido.")
+    if ASSET_UNIVERSE[selected_asset] == "HEADER":
+        st.warning("Por favor, seleccione un activo válido de la lista, no una categoría.")
         st.stop()
         
     custom_asset = st.sidebar.text_input("...o ingrese Ticker Manual:", "")
@@ -300,6 +299,7 @@ def render_dashboard():
 
     st.sidebar.divider()
     st.sidebar.header("4. Arquitectura del Modelo")
+    
     # VALOR POR DEFECTO A 21 DÍAS PARA LA PRUEBA EXACTA DE 1 MES
     days_to_project = st.sidebar.slider("Días de Proyección:", 10, 252, 21)
     simulations = {"1k": 1000, "5k": 5000, "10k": 10000}[st.sidebar.selectbox("Simulaciones:", ["1k", "5k", "10k"])]
@@ -321,7 +321,7 @@ def render_dashboard():
     if not df_hist.empty:
         df_hist = df_hist.iloc[:-21]
     # === FIN DE MÁQUINA DEL TIEMPO ===
-
+    
     if df_hist.empty:
         df_hist = generate_synthetic_data(ticker, days=500)
     else:
