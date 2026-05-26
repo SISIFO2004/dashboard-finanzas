@@ -1,3 +1,10 @@
+Aquí tienes el código completo actualizado hasta el **Paso 2**.
+
+He integrado el "cerebro evaluador" (`calculate_kalman_score`) justo debajo de tu filtro dinámico. La aplicación seguirá funcionando normalmente porque el panel de control (Streamlit) todavía está usando el puente temporal estático, pero ahora el motor matemático ya tiene las herramientas para calificar sus propios errores.
+
+Copia y reemplaza todo tu archivo `app.py`:
+
+```python
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -126,8 +133,62 @@ def apply_kalman_filter_dynamic(returns_array, divisor_inercia):
         x_hat[k] = x_hat_minus + K * (returns_array[k] - x_hat_minus)
         P[k] = (1 - K) * P_minus
         
-    # Retornamos el array COMPLETO para análisis posterior
     return x_hat
+
+def calculate_kalman_score(returns_array, divisor_inercia):
+    """
+    Función de Costo (Evaluador Cuantitativo).
+    Asigna penalizaciones al filtro basándose en Lag, SVR y Ruido Blanco.
+    El objetivo del optimizador será buscar el puntaje más cercano a CERO.
+    """
+    # 1. Obtener la curva del filtro con este divisor candidato
+    kalman_states = apply_kalman_filter_dynamic(returns_array, divisor_inercia)
+    
+    # =========================================================
+    # CRITERIO 1: SVR (Smoothing Variance Ratio) - Peso 30%
+    # =========================================================
+    raw_vol = np.std(returns_array)
+    kalman_vol = np.std(kalman_states)
+    
+    if raw_vol == 0: 
+        return float('inf'), 0, 0, 0
+        
+    svr = kalman_vol / raw_vol
+    penalty_svr = abs(svr - 0.30) * 30
+    
+    # =========================================================
+    # CRITERIO 2: Ruido Blanco (Test Durbin-Watson) - Peso 20%
+    # =========================================================
+    residuals = returns_array - kalman_states
+    diff_residuals = np.diff(residuals)
+    
+    suma_cuadrados_res = np.sum(residuals**2)
+    if suma_cuadrados_res != 0:
+        dw_stat = np.sum(diff_residuals**2) / suma_cuadrados_res
+    else:
+        dw_stat = 0
+        
+    penalty_dw = abs(dw_stat - 2.0) * 20
+    
+    # =========================================================
+    # CRITERIO 3: LAG (Prueba de Estrés Sintética) - Peso 50%
+    # =========================================================
+    shock_array = np.array([0.001, 0.001, 0.001, 0.001, 0.001, -0.05, -0.05, -0.01, -0.01, -0.01])
+    shock_states = apply_kalman_filter_dynamic(shock_array, divisor_inercia)
+    
+    lag_days = 5 
+    for i in range(5, len(shock_states)):
+        if shock_states[i] < 0:
+            lag_days = i - 4 
+            break
+            
+    penalty_lag = 0
+    if lag_days >= 3:
+        penalty_lag = 1000 
+        
+    total_error_score = penalty_svr + penalty_dw + penalty_lag
+    
+    return total_error_score, svr, dw_stat, lag_days
 
 def run_montecarlo_jumps(S0, mu, sigma, days, simulations, lambda_j, mu_j, sigma_j):
     dt = 1 / 252  
@@ -266,7 +327,7 @@ def render_dashboard():
         with st.spinner("Procesando Filtro de Kalman..."):
             # PUENTE TEMPORAL: Pasamos un divisor estático hasta tener el optimizador
             kalman_states = apply_kalman_filter_dynamic(daily_returns.values, divisor_inercia=100)
-            kalman_daily_mu = kalman_states[-1] # Extraemos el estado más reciente
+            kalman_daily_mu = kalman_states[-1] 
             mu = kalman_daily_mu * 252
             ruido_eliminado = abs(raw_mu - mu) * 100
     else:
@@ -402,3 +463,5 @@ if __name__ == "__main__":
                     mime="application/pdf",
                     type="primary"
                 )
+
+```
