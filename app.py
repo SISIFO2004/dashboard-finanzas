@@ -9,7 +9,6 @@ import datetime
 from datetime import timedelta
 import plotly.graph_objects as go
 from fpdf import FPDF
-from pykalman import KalmanFilter
 
 # ==============================================================================
 # CONFIGURACIÓN DE MEMORIA CACHÉ
@@ -93,28 +92,42 @@ def load_financial_data(ticker: str, tiingo_key: str = "") -> pd.DataFrame:
     return pd.DataFrame() 
 
 # ==============================================================================
-# FASE 2: FILTRO DE KALMAN Y MOTOR ESTOCÁSTICO
+# FASE 2: MOTOR MATEMÁTICO Y FILTRO KALMAN DINÁMICO
 # ==============================================================================
 
-def apply_kalman_filter(returns_array):
+def apply_kalman_filter_dynamic(returns_array, divisor_inercia):
     """
-    Aplica el Filtro de Kalman usando el algoritmo Expectation-Maximization 
-    para extraer la tendencia oculta (Drift) eliminando el ruido del mercado.
+    Filtro de Kalman 1D Dinámico (Módulo Base).
+    Calcula toda la serie de estados ocultos permitiendo que un optimizador
+    externo inyecte diferentes niveles de inercia (Q = R / D).
     """
-    kf = KalmanFilter(transition_matrices=[1],
-                      observation_matrices=[1],
-                      initial_state_mean=returns_array.mean(),
-                      initial_state_covariance=returns_array.var(),
-                      observation_covariance=returns_array.var(),
-                      transition_covariance=returns_array.var() / 100)
+    n = len(returns_array)
+    R = np.var(returns_array)
     
-    # Auto-calibración matemática (EM)
-    kf = kf.em(returns_array, n_iter=5)
-    state_means, _ = kf.filter(returns_array)
+    # Mecanismo de seguridad: Si el activo se congeló (volatilidad cero)
+    if R == 0: 
+        return np.full(n, returns_array[-1])
+        
+    Q = R / float(divisor_inercia) 
     
-    # El último estado es la tendencia "verdadera" purificada
-    kalman_daily_drift = state_means[-1][0]
-    return kalman_daily_drift
+    x_hat = np.zeros(n)
+    P = np.zeros(n)
+    
+    x_hat[0] = returns_array[0]
+    P[0] = 1.0
+    
+    for k in range(1, n):
+        # 1. Predicción
+        x_hat_minus = x_hat[k-1]
+        P_minus = P[k-1] + Q
+        
+        # 2. Actualización
+        K = P_minus / (P_minus + R)
+        x_hat[k] = x_hat_minus + K * (returns_array[k] - x_hat_minus)
+        P[k] = (1 - K) * P_minus
+        
+    # Retornamos el array COMPLETO para análisis posterior
+    return x_hat
 
 def run_montecarlo_jumps(S0, mu, sigma, days, simulations, lambda_j, mu_j, sigma_j):
     dt = 1 / 252  
@@ -244,14 +257,16 @@ def render_dashboard():
     
     daily_returns = df_hist['Close'].pct_change().dropna()
     raw_mu = daily_returns.mean() * 252
-    sigma = daily_returns.std() * np.sqrt(252) # Mantenemos volatilidad cruda para no subestimar el riesgo extremo
+    sigma = daily_returns.std() * np.sqrt(252)
     S0 = df_hist['Close'].iloc[-1]
     
-    # --- FILTRO DE KALMAN ---
+    # --- FILTRO DE KALMAN DINÁMICO ---
     ruido_eliminado = 0
     if use_kalman:
         with st.spinner("Procesando Filtro de Kalman..."):
-            kalman_daily_mu = apply_kalman_filter(daily_returns.values)
+            # PUENTE TEMPORAL: Pasamos un divisor estático hasta tener el optimizador
+            kalman_states = apply_kalman_filter_dynamic(daily_returns.values, divisor_inercia=100)
+            kalman_daily_mu = kalman_states[-1] # Extraemos el estado más reciente
             mu = kalman_daily_mu * 252
             ruido_eliminado = abs(raw_mu - mu) * 100
     else:
