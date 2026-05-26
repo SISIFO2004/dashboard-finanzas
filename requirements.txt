@@ -8,3 +8,4 @@ fpdf
 requests
 requests-cache
 pykalman==0.9.5
+scipy
