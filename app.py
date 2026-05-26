@@ -1,10 +1,3 @@
-Aquí tienes el código completo actualizado hasta el **Paso 2**.
-
-He integrado el "cerebro evaluador" (`calculate_kalman_score`) justo debajo de tu filtro dinámico. La aplicación seguirá funcionando normalmente porque el panel de control (Streamlit) todavía está usando el puente temporal estático, pero ahora el motor matemático ya tiene las herramientas para calificar sus propios errores.
-
-Copia y reemplaza todo tu archivo `app.py`:
-
-```python
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -111,7 +104,6 @@ def apply_kalman_filter_dynamic(returns_array, divisor_inercia):
     n = len(returns_array)
     R = np.var(returns_array)
     
-    # Mecanismo de seguridad: Si el activo se congeló (volatilidad cero)
     if R == 0: 
         return np.full(n, returns_array[-1])
         
@@ -139,14 +131,10 @@ def calculate_kalman_score(returns_array, divisor_inercia):
     """
     Función de Costo (Evaluador Cuantitativo).
     Asigna penalizaciones al filtro basándose en Lag, SVR y Ruido Blanco.
-    El objetivo del optimizador será buscar el puntaje más cercano a CERO.
     """
-    # 1. Obtener la curva del filtro con este divisor candidato
     kalman_states = apply_kalman_filter_dynamic(returns_array, divisor_inercia)
     
-    # =========================================================
     # CRITERIO 1: SVR (Smoothing Variance Ratio) - Peso 30%
-    # =========================================================
     raw_vol = np.std(returns_array)
     kalman_vol = np.std(kalman_states)
     
@@ -156,9 +144,7 @@ def calculate_kalman_score(returns_array, divisor_inercia):
     svr = kalman_vol / raw_vol
     penalty_svr = abs(svr - 0.30) * 30
     
-    # =========================================================
     # CRITERIO 2: Ruido Blanco (Test Durbin-Watson) - Peso 20%
-    # =========================================================
     residuals = returns_array - kalman_states
     diff_residuals = np.diff(residuals)
     
@@ -170,9 +156,7 @@ def calculate_kalman_score(returns_array, divisor_inercia):
         
     penalty_dw = abs(dw_stat - 2.0) * 20
     
-    # =========================================================
     # CRITERIO 3: LAG (Prueba de Estrés Sintética) - Peso 50%
-    # =========================================================
     shock_array = np.array([0.001, 0.001, 0.001, 0.001, 0.001, -0.05, -0.05, -0.01, -0.01, -0.01])
     shock_states = apply_kalman_filter_dynamic(shock_array, divisor_inercia)
     
@@ -189,6 +173,26 @@ def calculate_kalman_score(returns_array, divisor_inercia):
     total_error_score = penalty_svr + penalty_dw + penalty_lag
     
     return total_error_score, svr, dw_stat, lag_days
+
+def optimize_kalman_filter(returns_array):
+    """
+    Optimizador Autónomo (Grid Search).
+    Prueba múltiples divisores de inercia y selecciona el que tenga la menor 
+    penalización en la función de costo.
+    """
+    candidatos = [10, 20, 50, 100, 200, 300, 500]
+    mejor_divisor = 100
+    menor_error = float('inf')
+    mejores_metricas = {}
+    
+    for divisor in candidatos:
+        error, svr, dw, lag = calculate_kalman_score(returns_array, divisor)
+        if error < menor_error:
+            menor_error = error
+            mejor_divisor = divisor
+            mejores_metricas = {'svr': svr, 'dw': dw, 'lag': lag, 'error': error}
+            
+    return mejor_divisor, mejores_metricas
 
 def run_montecarlo_jumps(S0, mu, sigma, days, simulations, lambda_j, mu_j, sigma_j):
     dt = 1 / 252  
@@ -259,7 +263,7 @@ def generate_directive_common(prob_pos, sigma, var_loss_pct, days, capital, rend
 def render_dashboard():
     st.set_page_config(page_title="Quant Risk Engine", layout="wide", page_icon="📈")
     st.title("📊 Motor Cuantitativo de Riesgo")
-    st.markdown("Procesamiento Estocástico y Filtrado de Ruido (Kalman)")
+    st.markdown("Procesamiento Estocástico y Filtrado de Ruido (Kalman Dinámico)")
 
     st.sidebar.header("1. Datos y Conexión")
     tiingo_key_input = st.sidebar.text_input("Tiingo API Key (Opcional):", type="password")
@@ -302,7 +306,7 @@ def render_dashboard():
     
     st.sidebar.divider()
     st.sidebar.header("5. Procesamiento Avanzado")
-    use_kalman = st.sidebar.checkbox("🧠 Activar Filtro de Kalman (Filtrar Ruido)", value=True)
+    use_kalman = st.sidebar.checkbox("🧠 Activar Filtro de Kalman (Auto-Regulado)", value=True)
     
     with st.sidebar.expander("📉 Inyección Estocástica (Saltos)", expanded=False):
         lambda_j = st.slider("Prob. Saltos (λ):", 0.0, 10.0, 2.0)
@@ -321,12 +325,17 @@ def render_dashboard():
     sigma = daily_returns.std() * np.sqrt(252)
     S0 = df_hist['Close'].iloc[-1]
     
-    # --- FILTRO DE KALMAN DINÁMICO ---
+    # --- FILTRO DE KALMAN DINÁMICO (AUTO-REGULADO) ---
     ruido_eliminado = 0
+    divisor_usado = "Crudo"
     if use_kalman:
-        with st.spinner("Procesando Filtro de Kalman..."):
-            # PUENTE TEMPORAL: Pasamos un divisor estático hasta tener el optimizador
-            kalman_states = apply_kalman_filter_dynamic(daily_returns.values, divisor_inercia=100)
+        with st.spinner("Optimizando Filtro de Kalman (IA)..."):
+            # 1. El optimizador busca el ADN de volatilidad del activo
+            mejor_divisor, metricas = optimize_kalman_filter(daily_returns.values)
+            divisor_usado = f"D={mejor_divisor}"
+            
+            # 2. Aplicamos el filtro definitivo con el divisor ganador
+            kalman_states = apply_kalman_filter_dynamic(daily_returns.values, divisor_inercia=mejor_divisor)
             kalman_daily_mu = kalman_states[-1] 
             mu = kalman_daily_mu * 252
             ruido_eliminado = abs(raw_mu - mu) * 100
@@ -350,7 +359,7 @@ def render_dashboard():
     st.subheader(f"Telemetría del Activo: {ticker}")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Precio Spot", f"${S0:,.2f}")
-    c2.metric("Tendencia (Drift Anual)", f"{mu*100:.1f}%", f"{ruido_eliminado:.1f}% Ruido Filtrado" if use_kalman else "Datos Crudos", delta_color="normal" if use_kalman else "off")
+    c2.metric("Tendencia (Drift Anual)", f"{mu*100:.1f}%", f"{ruido_eliminado:.1f}% Ruido Filtrado ({divisor_usado})" if use_kalman else "Datos Crudos", delta_color="normal" if use_kalman else "off")
     c3.metric(f"Ratio de Sharpe", f"{sharpe_ratio:.2f}")
     c4.metric("Volatilidad (σ)", f"{sigma*100:.1f}%")
 
@@ -463,5 +472,3 @@ if __name__ == "__main__":
                     mime="application/pdf",
                     type="primary"
                 )
-
-```
