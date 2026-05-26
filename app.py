@@ -201,16 +201,20 @@ def generate_trading_signal(prob_pos, sharpe):
     elif prob_pos <= 0.35: return "🔴 VENTA / ALERTA", "Deterioro estructural crítico."
     else: return "⚪ MANTENER / ESPERAR", "Alta entropía direccional."
 
+# BUG SOLUCIONADO AQUÍ: Retorna 'estado' y 'rec'
 def generate_directive_common(prob_pos, current_sigma, var_loss_pct, days, capital, rend_esp, tp_price, var_price, conf_level):
     intro_txt = f"Basado en {days} días de proyección estocástica dual (Precio + Volatilidad):\n"
     crecimiento_txt = f"• **Capital Proyectado (Media):** Cambio de **{rend_esp:+,.2f}**.\n"
     if prob_pos > 0.65:
+        estado = "Alcista"
         rec = intro_txt + f"• **Señal:** Favorable. • **Take Profit:** ${tp_price:,.2f}. • **Stop-Loss (VaR {conf_level}%):** ${var_price:,.2f}.\n" + crecimiento_txt
     elif prob_pos < 0.35:
+        estado = "Bajista"
         rec = intro_txt + f"• **Señal:** Bloqueada. • **Soporte Crítico:** ${var_price:,.2f}.\n" + crecimiento_txt
     else:
+        estado = "Neutral"
         rec = intro_txt + f"• **Señal:** Retenida. Entorno simétrico.\n" + crecimiento_txt
-    return rec
+    return estado, rec
 
 # ==============================================================================
 # UI Y DASHBOARD (INTERFAZ DE USUARIO)
@@ -218,7 +222,7 @@ def generate_directive_common(prob_pos, current_sigma, var_loss_pct, days, capit
 
 def render_dashboard():
     st.set_page_config(page_title="Quant Risk Engine", layout="wide", page_icon="📈")
-    st.title("📊 Motor Cuantitativo de Riesgo (Volatilidad Estocástica)")
+    st.title("📊 Motor Cuantitativo de Riesgo (Modo Backtest)")
 
     st.sidebar.header("1. Datos y Conexión")
     tiingo_key_input = st.sidebar.text_input("Tiingo API Key (Opcional):", type="password")
@@ -264,6 +268,8 @@ def render_dashboard():
 
     st.sidebar.divider()
     st.sidebar.header("4. Arquitectura del Modelo")
+    
+    # VALOR POR DEFECTO A 21 DÍAS PARA LA PRUEBA EXACTA DE 1 MES
     days_to_project = st.sidebar.slider("Días de Proyección:", 10, 252, 21)
     simulations = {"1k": 1000, "5k": 5000, "10k": 10000}[st.sidebar.selectbox("Simulaciones:", ["1k", "5k", "10k"])]
     conf_level = st.sidebar.slider("Límite VaR (%):", 90.0, 99.9, 95.0, 0.1)
@@ -279,9 +285,10 @@ def render_dashboard():
 
     df_hist = load_financial_data(ticker, tiingo_key_input)
     
-    # MÁQUINA DEL TIEMPO (BACKTEST) ACTIVA
+    # === INICIO DE MÁQUINA DEL TIEMPO (-30 DÍAS CALENDARIO / 21 DÍAS HÁBILES) ===
     if not df_hist.empty:
         df_hist = df_hist.iloc[:-21]
+    # === FIN DE MÁQUINA DEL TIEMPO ===
         
     if df_hist.empty:
         df_hist = generate_synthetic_data(ticker, days=500)
@@ -337,7 +344,6 @@ def render_dashboard():
     c2.metric("Tendencia (Drift Anual)", f"{mu*100:.1f}%", f"{ruido_eliminado:.1f}% Ruido Filtrado ({divisor_usado})" if use_kalman else "Datos Crudos", delta_color="normal" if use_kalman else "off")
     c3.metric(f"Ratio de Sharpe", f"{sharpe_ratio:.2f}")
     
-    # Mostrar la diferencia entre Volatilidad Estática vs Dinámica en la métrica
     vol_label = "Volatilidad Dinámica (σ)" if use_kalman else "Volatilidad Estática (σ)"
     vol_delta = f"Media Histórica: {long_term_sigma_ann*100:.1f}%" if use_kalman else ""
     c4.metric(vol_label, f"{current_sigma_ann*100:.1f}%", vol_delta, delta_color="off")
