@@ -262,7 +262,7 @@ def generate_directive_common(prob_pos, sigma, var_loss_pct, days, capital, rend
 
 def render_dashboard():
     st.set_page_config(page_title="Quant Risk Engine", layout="wide", page_icon="📈")
-    st.title("📊 Motor Cuantitativo de Riesgo")
+    st.title("📊 Motor Cuantitativo de Riesgo (Modo Backtest)")
     st.markdown("Procesamiento Estocástico y Filtrado de Ruido (Kalman Dinámico)")
 
     st.sidebar.header("1. Datos y Conexión")
@@ -300,7 +300,8 @@ def render_dashboard():
 
     st.sidebar.divider()
     st.sidebar.header("4. Arquitectura del Modelo")
-    days_to_project = st.sidebar.slider("Días de Proyección:", 10, 252, 60)
+    # VALOR POR DEFECTO A 21 DÍAS PARA LA PRUEBA EXACTA DE 1 MES
+    days_to_project = st.sidebar.slider("Días de Proyección:", 10, 252, 21)
     simulations = {"1k": 1000, "5k": 5000, "10k": 10000}[st.sidebar.selectbox("Simulaciones:", ["1k", "5k", "10k"])]
     conf_level = st.sidebar.slider("Límite VaR (%):", 90.0, 99.9, 95.0, 0.1)
     
@@ -315,10 +316,16 @@ def render_dashboard():
 
     # --- INGESTA Y CÁLCULO ---
     df_hist = load_financial_data(ticker, tiingo_key_input)
+    
+    # === INICIO DE MÁQUINA DEL TIEMPO (-30 DÍAS CALENDARIO / 21 DÍAS HÁBILES) ===
+    if not df_hist.empty:
+        df_hist = df_hist.iloc[:-21]
+    # === FIN DE MÁQUINA DEL TIEMPO ===
+
     if df_hist.empty:
         df_hist = generate_synthetic_data(ticker, days=500)
     else:
-        st.caption(f"Conexión estable: {df_hist['Source'].iloc[0]}")
+        st.caption(f"Conexión estable: {df_hist['Source'].iloc[0]} (Modo Backtest Activo)")
     
     daily_returns = df_hist['Close'].pct_change().dropna()
     raw_mu = daily_returns.mean() * 252
@@ -330,11 +337,9 @@ def render_dashboard():
     divisor_usado = "Crudo"
     if use_kalman:
         with st.spinner("Optimizando Filtro de Kalman (IA)..."):
-            # 1. El optimizador busca el ADN de volatilidad del activo
             mejor_divisor, metricas = optimize_kalman_filter(daily_returns.values)
             divisor_usado = f"D={mejor_divisor}"
             
-            # 2. Aplicamos el filtro definitivo con el divisor ganador
             kalman_states = apply_kalman_filter_dynamic(daily_returns.values, divisor_inercia=mejor_divisor)
             kalman_daily_mu = kalman_states[-1] 
             mu = kalman_daily_mu * 252
@@ -358,7 +363,7 @@ def render_dashboard():
 
     st.subheader(f"Telemetría del Activo: {ticker}")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Precio Spot", f"${S0:,.2f}")
+    c1.metric("Precio Base (Hace 1 Mes)", f"${S0:,.2f}")
     c2.metric("Tendencia (Drift Anual)", f"{mu*100:.1f}%", f"{ruido_eliminado:.1f}% Ruido Filtrado ({divisor_usado})" if use_kalman else "Datos Crudos", delta_color="normal" if use_kalman else "off")
     c3.metric(f"Ratio de Sharpe", f"{sharpe_ratio:.2f}")
     c4.metric("Volatilidad (σ)", f"{sigma*100:.1f}%")
