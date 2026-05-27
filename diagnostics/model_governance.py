@@ -15,4 +15,16 @@ def calculate_model_diagnostics(returns_array, mapped_regimes_history, kalman_st
 
 def calculate_risk_metrics_phase1(S0, paths, conf_level):
     var_price = np.percentile(np.amin(paths, axis=0), 100 - conf_level)
-    return np.mean(paths[-1, :] > S0), var_price, np.median(paths[-1, :]), np.percentile(paths[-1, :], 90)
+    prob_pos = np.mean(paths[-1, :] > S0)
+    median_price = np.median(paths[-1, :])
+    tp_price = np.percentile(paths[-1, :], 90)
+    return prob_pos, var_price, median_price, tp_price
+
+def generate_directive(prob_pos, current_regime):
+    """Traduce la probabilidad y el régimen a una directriz humana"""
+    if prob_pos > 0.62 and current_regime != -1:
+        return "COMPRA FUERTE", "Condiciones favorables. Tendencia estructural validada."
+    elif prob_pos < 0.38 or current_regime == -1:
+        return "LIQUIDACIÓN PREVENTIVA", "Estrés estructural detectado. Cierre o protección mandatoria."
+    else:
+        return "RETENCIÓN / LATERAL", "Entorno de riesgo simétrico. Mantener exposición actual."
