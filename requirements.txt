@@ -1,11 +1,11 @@
 streamlit
+numpy
+pandas
 yfinance
 yahooquery
-plotly
-pandas
-numpy
-fpdf
 requests
 requests-cache
-pykalman==0.9.5
+plotly
+fpdf
+numba
 scipy
