@@ -94,7 +94,7 @@ def load_financial_data(ticker: str, tiingo_key: str = "") -> pd.DataFrame:
     return pd.DataFrame() 
 
 # ==============================================================================
-# FASE 2: MOTOR MATEMÁTICO (KALMAN + HESTON LITE)
+# FASE 2: MOTOR MATEMÁTICO (KALMAN + VOLATILIDAD DINÁMICA)
 # ==============================================================================
 
 def apply_kalman_filter_dynamic(returns_array, divisor_inercia):
@@ -164,23 +164,58 @@ def apply_stochastic_volatility_filter(returns_array, q_variance=0.1):
     dynamic_sigma = np.clip(dynamic_sigma, 0.0001, 1.0)
     return dynamic_sigma
 
-def run_montecarlo_heston_lite(S0, mu, current_sigma, long_term_sigma, days, simulations, lambda_j, mu_j, sigma_j):
+# ==============================================================================
+# FASE 3: SIMULACIÓN ESTOCÁSTICA AVANZADA (DRIFT + VOLATILIDAD + COLAS PESADAS)
+# ==============================================================================
+
+def run_montecarlo_advanced_stochastic(S0, current_mu, long_term_mu, current_sigma, long_term_sigma, days, simulations, lambda_j, mu_j, sigma_j):
+    """
+    Simulador Avanzado Estocástico.
+    - Drift con Reversión a la Media (Frena burbujas).
+    - Volatilidad Dinámica (Heston-Lite).
+    - Colas Pesadas (t-Student) para Cisnes Negros.
+    """
     dt = 1 / 252  
-    kappa = 5.0    
-    vol_vol = 0.2  
+    
+    # Parámetros de Reversión para la Volatilidad
+    kappa_v = 5.0    
+    vol_v = 0.2  
+    
+    # Parámetros de Reversión para la Tendencia (Drift)
+    kappa_mu = 2.0 # Velocidad a la que la euforia regresa a la normalidad
+    vol_mu = 0.1   # Ruido intrínseco de la tendencia
+    
     price_paths = np.zeros((days + 1, simulations))
     price_paths[0] = S0
+    
+    # Vectores de estado iniciales
     v_t = np.full(simulations, current_sigma)
-    Z_price = np.random.standard_normal((days, simulations))
+    mu_t = np.full(simulations, current_mu)
+    
+    # 1. Ruido para Volatilidad y Drift (Gausiano clásico)
     Z_vol = np.random.standard_normal((days, simulations))
+    Z_mu = np.random.standard_normal((days, simulations))
+    
+    # 2. Ruido para Precio: Distribución t-Student (Colas Pesadas)
+    # df=4 da colas extremas. Multiplicamos por sqrt(0.5) para estandarizar la varianza a 1.
+    Z_price = np.random.standard_t(df=4, size=(days, simulations)) * np.sqrt(0.5)
+    
+    # Proceso de Saltos (Poisson)
     poisson_jumps = np.random.poisson(lambda_j * dt, (days, simulations))
     jump_magnitudes = np.random.normal(mu_j, sigma_j, (days, simulations))
     jump_returns = poisson_jumps * jump_magnitudes
     
     for t in range(days):
-        v_t = np.abs(v_t + kappa * (long_term_sigma - v_t) * dt + vol_vol * np.sqrt(v_t * dt) * Z_vol[t])
-        gbm_returns = (mu - 0.5 * v_t**2) * dt + v_t * np.sqrt(dt) * Z_price[t]
+        # A. Evolucionar Volatilidad Estocástica
+        v_t = np.abs(v_t + kappa_v * (long_term_sigma - v_t) * dt + vol_v * np.sqrt(v_t * dt) * Z_vol[t])
+        
+        # B. Evolucionar Drift Estocástico (Freno de Euforia)
+        mu_t = mu_t + kappa_mu * (long_term_mu - mu_t) * dt + vol_mu * np.sqrt(dt) * Z_mu[t]
+        
+        # C. Proyección Final del Precio con Colas Pesadas
+        gbm_returns = (mu_t - 0.5 * v_t**2) * dt + v_t * np.sqrt(dt) * Z_price[t]
         total_returns = gbm_returns + jump_returns[t]
+        
         price_paths[t+1] = price_paths[t] * np.exp(total_returns)
         
     return price_paths
@@ -196,15 +231,14 @@ def calculate_risk_metrics(S0, final_prices, conf_level):
     return prob_positive, var_price, var_loss_pct, cvar_price, (cvar_price - S0)/S0, median_price, tp_price
 
 def generate_trading_signal(prob_pos, sharpe):
-    if prob_pos >= 0.65 and sharpe >= 1.0: return "🟢 COMPRA FUERTE", "Condiciones excelentes."
-    elif prob_pos >= 0.55 and sharpe > 0: return "🟡 COMPRA CAUTA", "Riesgo alto. Precaución."
-    elif prob_pos <= 0.35: return "🔴 VENTA / ALERTA", "Deterioro estructural crítico."
-    else: return "⚪ MANTENER / ESPERAR", "Alta entropía direccional."
+    if prob_pos >= 0.65 and sharpe >= 1.0: return "🟢 COMPRA FUERTE", "Condiciones excelentes. Tendencia estructural validada."
+    elif prob_pos >= 0.55 and sharpe > 0: return "🟡 COMPRA CAUTA", "Riesgo alto. Precaución con la reversión a la media."
+    elif prob_pos <= 0.35: return "🔴 VENTA / ALERTA", "Deterioro estructural. Presión bajista pesada."
+    else: return "⚪ MANTENER / ESPERAR", "Alta entropía direccional (Mercado Lateral)."
 
-# BUG SOLUCIONADO AQUÍ: Retorna 'estado' y 'rec'
 def generate_directive_common(prob_pos, current_sigma, var_loss_pct, days, capital, rend_esp, tp_price, var_price, conf_level):
-    intro_txt = f"Basado en {days} días de proyección estocástica dual (Precio + Volatilidad):\n"
-    crecimiento_txt = f"• **Capital Proyectado (Media):** Cambio de **{rend_esp:+,.2f}**.\n"
+    intro_txt = f"Basado en {days} días de proyección estocástica pura (Drift + Vol + Colas Pesadas):\n"
+    crecimiento_txt = f"• **Capital Proyectado (Media):** Cambio esperado de **{rend_esp:+,.2f}**.\n"
     if prob_pos > 0.65:
         estado = "Alcista"
         rec = intro_txt + f"• **Señal:** Favorable. • **Take Profit:** ${tp_price:,.2f}. • **Stop-Loss (VaR {conf_level}%):** ${var_price:,.2f}.\n" + crecimiento_txt
@@ -276,7 +310,7 @@ def render_dashboard():
     
     st.sidebar.divider()
     st.sidebar.header("5. Procesamiento Avanzado")
-    use_kalman = st.sidebar.checkbox("🧠 Activar Motor EKF (Tendencia y Volatilidad)", value=True)
+    use_kalman = st.sidebar.checkbox("🧠 Activar Motor Avanzado (Deriva y Volatilidad)", value=True)
     
     with st.sidebar.expander("📉 Inyección Estocástica (Saltos)", expanded=False):
         lambda_j = st.slider("Prob. Saltos (λ):", 0.0, 10.0, 2.0)
@@ -298,37 +332,40 @@ def render_dashboard():
     daily_returns = df_hist['Close'].pct_change().dropna()
     S0 = df_hist['Close'].iloc[-1]
     
-    # Cálculos Clásicos (Estáticos)
+    # Cálculos Clásicos (Estáticos y Medias a Largo Plazo)
     raw_mu = daily_returns.mean() * 252
     static_sigma_ann = daily_returns.std() * np.sqrt(252)
     
     ruido_eliminado = 0
     divisor_usado = "Crudo"
     
-    # --- FILTRADO DUAL: TENDENCIA Y VOLATILIDAD ---
+    # --- FILTRADO AVANZADO ---
     if use_kalman:
-        with st.spinner("Calibrando Filtros EKF y Lineal..."):
-            # 1. Filtro Lineal para la Tendencia
+        with st.spinner("Calibrando Algoritmos Estocásticos..."):
             mejor_divisor, metricas = optimize_kalman_filter(daily_returns.values)
             divisor_usado = f"D={mejor_divisor}"
-            kalman_states = apply_kalman_filter_dynamic(daily_returns.values, divisor_inercia=mejor_divisor)
-            mu = kalman_states[-1] * 252
-            ruido_eliminado = abs(raw_mu - mu) * 100
             
-            # 2. Filtro Log-Cuadrático para la Volatilidad
+            # Tendencia de Corto Plazo (Euforia actual)
+            kalman_states = apply_kalman_filter_dynamic(daily_returns.values, divisor_inercia=mejor_divisor)
+            current_mu = kalman_states[-1] * 252
+            long_term_mu = raw_mu # El ancla de gravedad hacia donde revertirá
+            ruido_eliminado = abs(raw_mu - current_mu) * 100
+            
+            # Volatilidad Dinámica
             dynamic_sigma_daily = apply_stochastic_volatility_filter(daily_returns.values)
             current_sigma_ann = dynamic_sigma_daily[-1] * np.sqrt(252)
             long_term_sigma_ann = np.mean(dynamic_sigma_daily) * np.sqrt(252)
     else:
-        mu = raw_mu
+        current_mu = raw_mu
+        long_term_mu = raw_mu
         current_sigma_ann = static_sigma_ann
         long_term_sigma_ann = static_sigma_ann
 
     risk_free_rate = 0.045 
-    sharpe_ratio = (mu - risk_free_rate) / current_sigma_ann if current_sigma_ann > 0 else 0
+    sharpe_ratio = (current_mu - risk_free_rate) / current_sigma_ann if current_sigma_ann > 0 else 0
     
-    with st.spinner("Ejecutando Simulación Heston-Lite (Precio + Volatilidad)..."):
-        paths = run_montecarlo_heston_lite(S0, mu, current_sigma_ann, long_term_sigma_ann, days_to_project, simulations, lambda_j, mu_j, sigma_j)
+    with st.spinner("Ejecutando Simulación Avanzada (Drift Estocástico + Colas Pesadas)..."):
+        paths = run_montecarlo_advanced_stochastic(S0, current_mu, long_term_mu, current_sigma_ann, long_term_sigma_ann, days_to_project, simulations, lambda_j, mu_j, sigma_j)
         final_prices = paths[-1, :]
         prob_pos, var_price, var_loss, cvar_price, cvar_loss, median_price, tp_price = calculate_risk_metrics(S0, final_prices, conf_level)
 
@@ -341,11 +378,11 @@ def render_dashboard():
     st.subheader(f"Telemetría del Activo: {ticker}")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Precio Base (Backtest)", f"${S0:,.2f}")
-    c2.metric("Tendencia (Drift Anual)", f"{mu*100:.1f}%", f"{ruido_eliminado:.1f}% Ruido Filtrado ({divisor_usado})" if use_kalman else "Datos Crudos", delta_color="normal" if use_kalman else "off")
+    c2.metric("Tendencia de Corto Plazo", f"{current_mu*100:.1f}%", f"{ruido_eliminado:.1f}% Ruido Filtrado ({divisor_usado})" if use_kalman else "Datos Crudos", delta_color="normal" if use_kalman else "off")
     c3.metric(f"Ratio de Sharpe", f"{sharpe_ratio:.2f}")
     
     vol_label = "Volatilidad Dinámica (σ)" if use_kalman else "Volatilidad Estática (σ)"
-    vol_delta = f"Media Histórica: {long_term_sigma_ann*100:.1f}%" if use_kalman else ""
+    vol_delta = f"Ancla Largo Plazo: {long_term_sigma_ann*100:.1f}%" if use_kalman else ""
     c4.metric(vol_label, f"{current_sigma_ann*100:.1f}%", vol_delta, delta_color="off")
 
     st.subheader(f"Plan de Ejecución ({days_to_project} días)")
@@ -367,7 +404,7 @@ def render_dashboard():
     # --- PORTAFOLIO Y GRÁFICA ---
     p1, p2, p3 = st.columns(3)
     p1.metric("Capital Invertido", f"{simbolo}{capital_inicial:,.2f}")
-    p2.metric("Valor Esperado", f"{simbolo}{capital_esperado:,.2f}", f"{simbolo}{rendimiento_esperado:,.2f}")
+    p2.metric("Valor Esperado (Mediana)", f"{simbolo}{capital_esperado:,.2f}", f"{simbolo}{rendimiento_esperado:,.2f}")
     p3.metric("Capital en Riesgo (VaR)", f"{simbolo}{capital_var:,.2f}", f"{simbolo}{capital_var - capital_inicial:,.2f}", delta_color="inverse")
 
     fig = go.Figure()
@@ -381,7 +418,7 @@ def render_dashboard():
     fig.add_trace(go.Scatter(x=[0, days_to_project], y=[tp_price, tp_price], mode='lines', name='Take Profit', line=dict(color='green', width=2, dash='dashdot')))
     fig.add_trace(go.Scatter(x=[0, days_to_project], y=[var_price, var_price], mode='lines', name='Stop-Loss (VaR)', line=dict(color='red', width=2, dash='dot')))
     
-    fig.update_layout(title=f"Matriz Estocástica Dual ({simulations} proyecciones)", height=400, template="plotly_white")
+    fig.update_layout(title=f"Matriz de Supervivencia ({simulations} proyecciones con Reversión a la Media y Colas Pesadas)", height=400, template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
 
     return {
@@ -404,7 +441,7 @@ def create_pdf_report(data: dict) -> bytes:
     pdf.set_font("Arial", 'B', 16)
     pdf.cell(0, 10, txt=f"REPORTE CUANTITATIVO: {data['ticker']}", ln=True, align='C')
     pdf.set_font("Arial", 'I', 10)
-    pdf.cell(0, 8, txt=f"Fecha: {datetime.datetime.now().strftime('%Y-%m-%d')} | Filtro Dual EKF: {'ACTIVO' if data['kalman'] else 'INACTIVO'}", ln=True, align='C')
+    pdf.cell(0, 8, txt=f"Fecha: {datetime.datetime.now().strftime('%Y-%m-%d')} | Modelo: Estocastico Avanzado", ln=True, align='C')
     pdf.ln(5)
 
     pdf.set_font("Arial", 'B', 12)
@@ -416,7 +453,7 @@ def create_pdf_report(data: dict) -> bytes:
     pdf.set_font("Arial", '', 10)
     pdf.cell(0, 6, txt=f"   - Entrada: ${data['S0']:.2f}", ln=True)
     pdf.cell(0, 6, txt=f"   - Take Profit: ${data['tp_price']:.2f}", ln=True)
-    pdf.cell(0, 6, txt=f"   - Stop-Loss: ${data['var_price']:.2f}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Stop-Loss (VaR): ${data['var_price']:.2f}", ln=True)
     pdf.ln(5)
 
     pdf.set_font("Arial", 'B', 12)
@@ -429,7 +466,7 @@ def create_pdf_report(data: dict) -> bytes:
     pdf.ln(5)
 
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 8, txt=" 3. DIRECTRIZ", ln=True, fill=True)
+    pdf.cell(0, 8, txt=" 3. DIRECTRIZ INSTITUCIONAL", ln=True, fill=True)
     pdf.set_font("Arial", '', 10)
     clean_text = data['recomendacion'].replace('**', '').replace('•', '-')
     sustituciones = {'á':'a', 'é':'e', 'í':'i', 'ó':'o', 'ú':'u', 'Á':'A', 'É':'E', 'Í':'I', 'Ó':'O', 'Ú':'U'}
@@ -451,9 +488,9 @@ if __name__ == "__main__":
             with st.spinner("Compilando PDF..."):
                 pdf_bytes = create_pdf_report(report_data)
                 st.download_button(
-                    label="📥 Descargar Reporte EKF PDF",
+                    label="📥 Descargar Reporte PDF",
                     data=pdf_bytes,
-                    file_name=f"Quant_EKF_{report_data['ticker']}.pdf",
+                    file_name=f"Quant_Risk_{report_data['ticker']}.pdf",
                     mime="application/pdf",
                     type="primary"
                 )
