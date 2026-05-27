@@ -2,6 +2,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import datetime
+from fpdf import FPDF
 
 # ==============================================================================
 # IMPORTACIONES DESDE LA ARQUITECTURA MODULAR
@@ -12,45 +14,97 @@ from models.inference_bgmm import identify_bayesian_regimes
 from simulation.stoch_generators import apply_kalman_filter_dynamic, apply_stochastic_volatility_filter, run_montecarlo_advanced_stochastic
 from diagnostics.model_governance import calculate_model_diagnostics, calculate_risk_metrics_phase1
 
+# ==============================================================================
+# EXPORTACIÓN PDF INSTITUCIONAL
+# ==============================================================================
+def create_pdf_report(data: dict) -> bytes:
+    pdf = FPDF()
+    pdf.add_page()
+    
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, txt=f"REPORTE CUANTITATIVO: {data['ticker']}", ln=True, align='C')
+    pdf.set_font("Arial", 'I', 10)
+    pdf.cell(0, 8, txt=f"Fecha: {datetime.datetime.now().strftime('%Y-%m-%d')} | Laboratorio Estocastico Bayesiano", ln=True, align='C')
+    pdf.ln(5)
+
+    pdf.set_font("Arial", 'B', 12)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(0, 8, txt=" 1. DIAGNOSTICO DE REGIMEN (GMM)", ln=True, fill=True)
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(0, 6, txt=f"   - ESTADO DETECTADO: {data['estado_ml']}", ln=True)
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 6, txt=f"   - Estabilidad del Manifold: {data['persistencia']:.1f} dias", ln=True)
+    pdf.ln(5)
+
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 8, txt=" 2. NIVELES OPERATIVOS Y RIESGO", ln=True, fill=True)
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 6, txt=f"   - Precio Base: ${data['S0']:.2f}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Take Profit Proyectado: ${data['tp_price']:.2f}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Touch Stop-Loss (VaR {data['conf_level']}%): ${data['var_price']:.2f}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Friccion Historica (VaR Exceedance): {data['exceedance']*100:.1f}%", ln=True)
+    pdf.ln(5)
+
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 8, txt=" 3. MOTORES MATEMATICOS ACTIVOS", ln=True, fill=True)
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 6, txt="   [x] Difusion Continua (Drift Estabilizado)", ln=True)
+    pdf.cell(0, 6, txt="   [x] Colas Pesadas t-Student (Cisnes Negros)", ln=True)
+    pdf.cell(0, 6, txt="   [x] Saltos de Merton Condicionados (Poisson Jumps)", ln=True)
+
+    pdf_string = pdf.output(dest='S')
+    return pdf_string.encode('latin-1', errors='replace')
+
+# ==============================================================================
+# MOTOR DE INTERPRETACIÓN CLÍNICA DE DATOS (NUEVO)
+# ==============================================================================
+def interpret_structural_features(latest_features: pd.Series) -> list:
+    insights = []
+    
+    # Análisis de Kurtosis (Cisnes Negros)
+    if latest_features['Kurtosis_20'] > 3.0:
+        insights.append("⚠️ **Alerta de Cisne Negro:** La Kurtosis es anormalmente alta. El activo está propenso a movimientos violentos e impredecibles que rompen la campana de Gauss.")
+    elif latest_features['Kurtosis_20'] < 1.0:
+        insights.append("🛡️ **Riesgo de Cola Bajo:** La distribución de retornos es plana. Los movimientos extremos son estadísticamente improbables en este momento.")
+        
+    # Análisis de Volatilidad y Drawdown
+    if latest_features['DD_Velocity'] < -0.05:
+        insights.append("📉 **Aceleración Bajista:** La velocidad del Drawdown indica que el activo está en caída libre estructural. Riesgo de cascada de liquidaciones.")
+    elif latest_features['Realized_Vol_20'] > 0.40 and latest_features['Returns'] > 0:
+        insights.append("🔥 **Euforia Volátil (Melt-Up):** Alta volatilidad combinada con retornos positivos. Posible formación de burbuja a corto plazo.")
+        
+    # Análisis de Entropía
+    if 'Entropy_20' in latest_features and latest_features['Entropy_20'] > 2.0:
+        insights.append("🌪️ **Alta Entropía:** El mercado está en estado de desorden. La predictibilidad direccional es nula; el ruido domina a la señal.")
+        
+    if not insights:
+        insights.append("✅ **Estructura Estable:** Las métricas de estrés se encuentran dentro de rangos normales de operación estocástica.")
+        
+    return insights
+
+# ==============================================================================
+# UI Y DASHBOARD ORQUESTADOR
+# ==============================================================================
 def render_dashboard():
     st.set_page_config(page_title="Quant Lab: Research & Inference", layout="wide", page_icon="🧬")
-    st.title("🧬 Laboratorio Cuantitativo: Inferencia de Riesgo")
-
+    
     with st.spinner("Sincronizando Entorno Macroeconómico..."):
         risk_free_rate, current_vix = get_macro_context()
 
     with st.sidebar:
         st.header("1. Configuración de Entorno")
         
-        # RESTAURACIÓN DEL UNIVERSO DE ACTIVOS CORPORATIVO
         ASSET_UNIVERSE = {
             "🔍 Entrada Manual (Ticker)": "MANUAL",
-            "--- ÍNDICES Y ETFS ---": "HEADER",
-            "📊 S&P 500 ETF (SPY)": "SPY",
-            "📊 Nasdaq 100 ETF (QQQ)": "QQQ",
-            "--- TECNOLOGÍA (MAG 7) ---": "HEADER",
-            "🇺🇸 Apple Inc. (AAPL)": "AAPL",
-            "🇺🇸 Microsoft Corp. (MSFT)": "MSFT",
-            "🇺🇸 NVIDIA Corp. (NVDA)": "NVDA",
-            "🇺🇸 Alphabet Inc. (GOOGL)": "GOOGL",
-            "🇺🇸 Amazon.com Inc. (AMZN)": "AMZN",
-            "🇺🇸 Meta Platforms (META)": "META",
-            "🇺🇸 Tesla Inc. (TSLA)": "TSLA",
-            "--- FINANZAS E INDUSTRIA ---": "HEADER",
-            "🇺🇸 JPMorgan Chase (JPM)": "JPM",
-            "🇺🇸 Berkshire Hathaway (BRK-B)": "BRK-B",
+            "--- TECNOLOGÍA ---": "HEADER",
+            "🇺🇸 NVIDIA Corp. (NVDA)": "NVDA", "🇺🇸 Apple Inc. (AAPL)": "AAPL",
             "--- CRIPTOMONEDAS ---": "HEADER",
-            "₿ Bitcoin (BTC-USD)": "BTC-USD",
-            "⟠ Ethereum (ETH-USD)": "ETH-USD",
-            "☀️ Solana (SOL-USD)": "SOL-USD",
+            "₿ Bitcoin (BTC-USD)": "BTC-USD", "⟠ Ethereum (ETH-USD)": "ETH-USD",
             "--- MATERIAS PRIMAS ---": "HEADER",
-            "🥇 Oro ETF (GLD)": "GLD",
-            "🥈 Plata ETF (SLV)": "SLV",
-            "🛢️ Petróleo ETF (USO)": "USO"
+            "🥇 Oro ETF (GLD)": "GLD", "🥈 Plata ETF (SLV)": "SLV"
         }
         
         sel_asset = st.selectbox("Seleccione un Activo:", list(ASSET_UNIVERSE.keys()))
-        
         if ASSET_UNIVERSE[sel_asset] == "HEADER":
             st.warning("⚠️ Selecciona un activo válido abajo.")
             st.stop()
@@ -59,22 +113,21 @@ def render_dashboard():
         ticker = custom_asset.upper() if custom_asset else ASSET_UNIVERSE[sel_asset]
         
         st.divider()
+        st.header("2. Arquitectura de Simulación")
         capital_inicial = st.number_input("Capital Base ($):", min_value=10.0, value=10000.0, step=1000.0)
-        days_to_project = st.slider("Horizonte de Proyección (Días):", 10, 252, 21)
-        simulations = 5000
-        conf_level = st.slider("Límite de Confianza VaR (%):", 90.0, 99.9, 95.0, 0.1)
+        days_to_project = st.slider("Días de Proyección:", 10, 252, 21)
+        simulations = {"1k": 1000, "5k": 5000, "10k": 10000}[st.selectbox("Simulaciones:", ["1k", "5k", "10k"], index=2)]
+        conf_level = st.slider("Límite VaR (%):", 90.0, 99.9, 95.0, 0.1)
 
     trading_days = 365 if "USD" in ticker else 252
 
     try:
         df_hist = load_financial_data(ticker, "")
-        st.caption(f"✅ Conexión estable a mercado corporativo | Base temporal: {trading_days} días")
     except ValueError:
         df_hist = generate_synthetic_data(ticker, days=500, trading_days=trading_days)
-        st.error("🚨 **ALERTA CRÍTICA DE INFRAESTRUCTURA:** Conexión fallida con proveedores externos. Desplegando simulación teórica base.")
+        st.error("🚨 **ALERTA CRÍTICA:** Conexión fallida. Desplegando simulación teórica base.")
 
-    if not df_hist.empty:
-        df_hist = df_hist.iloc[:-21]
+    if not df_hist.empty: df_hist = df_hist.iloc[:-21]
 
     with st.spinner("Inferencia Bayesiana y Construcción de Manifold..."):
         df_features = engineer_structural_features(df_hist, trading_days)
@@ -102,40 +155,70 @@ def render_dashboard():
         prob_pos, var_price, median_price, tp_price = calculate_risk_metrics_phase1(S0, paths, conf_level)
         persistencia, durbin_watson, exceedance = calculate_model_diagnostics(daily_returns.values, regime_history, kalman_states)
 
-    col_proj, col_val = st.columns([2, 1])
+    # ==============================================================================
+    # RENDERIZADO VISUAL RESTAURADO
+    # ==============================================================================
+    st.title(f"Telemetría Cuantitativa: {ticker}")
     
-    with col_proj:
-        st.subheader("📊 Proyección de Escenarios Generados")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Precio Base ($)", f"{S0:,.2f}")
-        estado_visual = "🔴 Estrés Estructural" if current_regime == -1 else "🟢 Expansión Estable" if current_regime == 1 else "⚪ Transición Latente"
-        c2.metric("Régimen Geométrico (ML)", estado_visual)
-        c3.metric("Touch Stop-Loss (VaR)", f"${var_price:,.2f}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Precio Base", f"${S0:,.2f}")
+    c2.metric("Tendencia (Filtro Kalman)", f"{current_mu*100:.1f}%")
+    c3.metric("Fricción VaR (Exceedance)", f"{exceedance*100:.1f}%")
+    c4.metric("Volatilidad Dinámica", f"{current_sigma_ann*100:.1f}%")
 
-        fig = go.Figure()
-        for i in range(min(50, paths.shape[1])): fig.add_trace(go.Scatter(x=np.arange(days_to_project + 1), y=paths[:, i], mode='lines', line=dict(color='rgba(0, 100, 255, 0.08)'), showlegend=False))
-        fig.add_trace(go.Scatter(x=[0, days_to_project], y=[S0, S0], mode='lines', name='Nivel Entrada', line=dict(color='black', dash='dash')))
-        fig.add_trace(go.Scatter(x=[0, days_to_project], y=[var_price, var_price], mode='lines', name='Touch VaR Baseline', line=dict(color='red', dash='dot')))
-        fig.update_layout(height=400, margin=dict(l=10, r=10, t=20, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-        st.plotly_chart(fig, use_container_width=True)
+    estado_ml_txt = "🔴 Estrés Estructural" if current_regime == -1 else "🟢 Expansión Estable" if current_regime == 1 else "⚪ Transición Latente"
+    
+    st.subheader(f"Plan de Ejecución ({days_to_project} días)")
+    
+    # Cajas de colores restauradas
+    col_dir, col_tp, col_sl = st.columns(3)
+    with col_dir:
+        st.info(f"**RÉGIMEN BAYESIANO:**\n\n{estado_ml_txt}\n\n*Persistencia actual: {persistencia:.1f} días.*")
+    with col_tp:
+        st.success(f"**TAKE PROFIT (Probabilístico):**\n\n${tp_price:,.2f}\n\n*Basado en la distribución proyectada.*")
+    with col_sl:
+        st.error(f"**TOUCH STOP-LOSS (VaR {conf_level}%):**\n\n${var_price:,.2f}\n\n*Límite de dolor institucional.*")
 
-    with col_val:
-        st.subheader("🛡️ Panel de Calibración y Auditoría")
-        color_friccion = "normal" if abs(exceedance - 0.05) < 0.02 else "inverse"
-        st.metric("Fricción Histórica (VaR Exceedance)", f"{exceedance*100:.1f}%", f"Objetivo: ~5.0%", delta_color=color_friccion)
-        st.divider()
-        color_persistencia = "normal" if persistencia > 10 else "inverse"
-        st.metric("Estabilidad de Manifold", f"{persistencia:.1f} días", "Alerta de Drift" if persistencia < 10 else "Estructura Sólida", delta_color=color_persistencia)
-        st.divider()
-        st.metric("Pureza de Tendencia (Durbin-Watson)", f"{durbin_watson:.2f}", "Ideal: ~2.00")
+    st.caption("⚙️ **Motores Activos:** Difusión Estocástica Acelerada (Numba JIT) + **Cisnes Negros** (Colas t-Student) + **Saltos de Merton** (Poisson Jumps) condicionados por IA.")
 
+    # Gráfico
+    fig = go.Figure()
+    for i in range(min(50, paths.shape[1])): 
+        fig.add_trace(go.Scatter(x=np.arange(days_to_project + 1), y=paths[:, i], mode='lines', line=dict(color='rgba(0, 100, 255, 0.08)'), showlegend=False))
+    fig.add_trace(go.Scatter(x=[0, days_to_project], y=[S0, S0], mode='lines', name='Nivel Entrada', line=dict(color='black', dash='dash')))
+    fig.add_trace(go.Scatter(x=[0, days_to_project], y=[var_price, var_price], mode='lines', name='Touch VaR Baseline', line=dict(color='red', dash='dot')))
+    fig.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Diagnóstico e Interpretación
     st.markdown("---")
-    with st.expander("🔍 Laboratorio Cuantitativo: Matriz de Características", expanded=False):
-        # Utilizamos un fallback seguro en caso de que matplotlib aún no se haya cargado en el entorno
-        try:
-            st.dataframe(df_features.tail(10).style.format("{:.4f}").background_gradient(cmap='Purples'), use_container_width=True)
-        except Exception:
-            st.dataframe(df_features.tail(10), use_container_width=True)
+    st.subheader("🔬 Laboratorio de Diagnóstico Estructural")
+    
+    try:
+        latest_features = df_features.iloc[-1]
+        insights = interpret_structural_features(latest_features)
+        
+        col_table, col_interp = st.columns([2, 1])
+        with col_table:
+            st.dataframe(df_features.tail(5).style.format("{:.4f}").background_gradient(cmap='Purples'), use_container_width=True)
+        with col_interp:
+            st.markdown("### Traducción Matemática:")
+            for insight in insights:
+                st.markdown(insight)
+    except Exception:
+        st.warning("Esperando sincronización de matriz de características para generar diagnóstico...")
+
+    # Reporte PDF
+    report_data = {
+        "ticker": ticker, "S0": S0, "tp_price": tp_price, "var_price": var_price,
+        "estado_ml": estado_ml_txt, "persistencia": persistencia, "exceedance": exceedance,
+        "conf_level": conf_level
+    }
+    
+    with st.sidebar:
+        st.markdown("---")
+        pdf_bytes = create_pdf_report(report_data)
+        st.download_button(label="📥 Descargar Reporte PDF", data=pdf_bytes, file_name=f"Quant_Report_{ticker}.pdf", mime="application/pdf", type="primary")
 
 if __name__ == "__main__":
     render_dashboard()
