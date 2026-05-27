@@ -6,18 +6,22 @@ import datetime
 import unicodedata
 from fpdf import FPDF
 
+# ==============================================================================
+# IMPORTACIONES MODULARES
+# ==============================================================================
 from core.data_ingestion import get_macro_context, load_financial_data, generate_synthetic_data
 from features.structural_engine import engineer_structural_features
 from models.inference_bgmm import identify_bayesian_regimes
 from simulation.stoch_generators import apply_kalman_filter_dynamic, apply_stochastic_volatility_filter, run_montecarlo_advanced_stochastic
-from diagnostics.model_governance import calculate_model_diagnostics, calculate_risk_metrics_phase1, generate_directive
+from diagnostics.model_governance import calculate_model_diagnostics, calculate_risk_metrics_phase1
 
 # ==============================================================================
 # PDF Y SANITIZACIÓN
 # ==============================================================================
 def clean_text_for_pdf(text):
     text = str(text)
-    for e in ['🔴', '🟢', '⚪', '⚠️', '🛡️', '📉', '🔥', '🌪️', '✅', '⚙️', '🔬', '📊', '🧬', '📥']: text = text.replace(e, '')
+    for e in ['🔴', '🟢', '⚪', '⚠️', '🛡️', '📉', '🔥', '🌪️', '✅', '⚙️', '🔬', '📊', '🧬', '📥']: 
+        text = text.replace(e, '')
     return unicodedata.normalize('NFKD', text).encode('latin-1', 'ignore').decode('latin-1').strip()
 
 def create_pdf_report(data: dict) -> bytes:
@@ -34,19 +38,27 @@ def create_pdf_report(data: dict) -> bytes:
     pdf.cell(0, 8, txt=" 1. DIAGNOSTICO DE REGIMEN (GMM)", ln=True, fill=True)
     pdf.set_font("Arial", '', 10)
     pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Estado Detectado: {data['estado_ml']}"), ln=True)
-    pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Directriz: {data['directriz']}"), ln=True)
     pdf.ln(5)
 
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(0, 8, txt=" 2. SIMULACION DE CAPITAL Y RIESGO", ln=True, fill=True)
     pdf.set_font("Arial", '', 10)
-    pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Capital Invertido: ${data['capital_inicial']:,.2f}"), ln=True)
-    pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Valor Esperado (Mediana): ${data['capital_esperado']:,.2f}"), ln=True)
-    pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Capital en Riesgo (VaR {data['conf_level']}%): ${data['capital_var']:,.2f}"), ln=True)
+    sym = data['sym']
+    pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Capital Invertido: {sym}{data['capital_inicial']:,.2f}"), ln=True)
+    pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Valor Esperado (Mediana): {sym}{data['capital_esperado']:,.2f}"), ln=True)
+    pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Capital en Riesgo (VaR {data['conf_level']}%): {sym}{data['capital_var']:,.2f}"), ln=True)
     pdf.ln(5)
 
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 8, txt=" 3. INTERPRETACION CLINICA", ln=True, fill=True)
+    pdf.cell(0, 8, txt=" 3. NIVELES DEL ACTIVO (USD)", ln=True, fill=True)
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Precio Base: ${data['S0']:.2f}"), ln=True)
+    pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Take Profit Proyectado: ${data['tp_price']:.2f}"), ln=True)
+    pdf.cell(0, 6, txt=clean_text_for_pdf(f"   - Touch Stop-Loss: ${data['var_price']:.2f}"), ln=True)
+    pdf.ln(5)
+
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 8, txt=" 4. INTERPRETACION CLINICA", ln=True, fill=True)
     pdf.set_font("Arial", '', 10)
     for insight in data['insights']:
         pdf.multi_cell(0, 6, txt=f"   * {clean_text_for_pdf(insight).replace('**', '')}")
@@ -64,6 +76,11 @@ def interpret_structural_features(latest_features: pd.Series) -> list:
     if not insights: insights.append("✅ **Estructura Nominal:** Métricas de estrés dentro de rangos operativos normales.")
     return insights
 
+def generate_directive(prob_pos, current_regime):
+    if prob_pos > 0.62 and current_regime != -1: return "COMPRA FUERTE", "Condiciones favorables. Tendencia estructural validada."
+    elif prob_pos < 0.38 or current_regime == -1: return "LIQUIDACIÓN PREVENTIVA", "Estrés estructural detectado. Protección mandatoria."
+    else: return "RETENCIÓN / LATERAL", "Entorno de riesgo simétrico. Mantener exposición."
+
 # ==============================================================================
 # ORQUESTADOR UI
 # ==============================================================================
@@ -74,22 +91,39 @@ def render_dashboard():
         risk_free_rate, current_vix = get_macro_context()
 
     with st.sidebar:
-        st.header("1. Configuración de Entorno")
+        st.header("1. Selección de Activo")
+        
+        # UNIVERSO DE ACTIVOS MASIVO Y MULTI-SECTOR
         ASSET_UNIVERSE = {
             "🔍 Entrada Manual (Ticker)": "MANUAL",
-            "--- TECNOLOGÍA ---": "HEADER", "🇺🇸 NVIDIA (NVDA)": "NVDA", "🇺🇸 Apple (AAPL)": "AAPL",
-            "--- CRIPTOMONEDAS ---": "HEADER", "₿ Bitcoin (BTC-USD)": "BTC-USD", "⟠ Ethereum (ETH-USD)": "ETH-USD",
-            "--- COMMODITIES ---": "HEADER", "🥇 Oro (GLD)": "GLD", "🥈 Plata (SLV)": "SLV"
+            "--- ÍNDICES GLOBALES ---": "HEADER",
+            "📊 S&P 500 ETF (SPY)": "SPY", "📊 Nasdaq 100 (QQQ)": "QQQ", "📊 Russell 2000 (IWM)": "IWM", "📊 Dow Jones (DIA)": "DIA",
+            "--- LATAM & EMERGENTES ---": "HEADER",
+            "🇵🇪 Credicorp Ltd. (BAP)": "BAP", "🇵🇪 iShares MSCI Peru (EPU)": "EPU", "🇧🇷 iShares MSCI Brazil (EWZ)": "EWZ", "🇲🇽 iShares MSCI Mexico (EWW)": "EWW",
+            "--- TECNOLOGÍA (MAG 7) ---": "HEADER",
+            "🇺🇸 NVIDIA (NVDA)": "NVDA", "🇺🇸 Apple (AAPL)": "AAPL", "🇺🇸 Microsoft (MSFT)": "MSFT", "🇺🇸 Alphabet (GOOGL)": "GOOGL", "🇺🇸 Amazon (AMZN)": "AMZN", "🇺🇸 Meta (META)": "META", "🇺🇸 Tesla (TSLA)": "TSLA",
+            "--- FINANZAS E INDUSTRIA ---": "HEADER",
+            "🇺🇸 JPMorgan (JPM)": "JPM", "🇺🇸 Berkshire Hathaway (BRK-B)": "BRK-B", "🇺🇸 Visa (V)": "V", "🇺🇸 Johnson & Johnson (JNJ)": "JNJ",
+            "--- CRIPTOMONEDAS ---": "HEADER",
+            "₿ Bitcoin (BTC-USD)": "BTC-USD", "⟠ Ethereum (ETH-USD)": "ETH-USD", "☀️ Solana (SOL-USD)": "SOL-USD", "💠 Cardano (ADA-USD)": "ADA-USD",
+            "--- MATERIAS PRIMAS ---": "HEADER",
+            "🥇 Oro (GLD)": "GLD", "🥈 Plata (SLV)": "SLV", "🛢️ Petróleo Crudo (USO)": "USO", "🌾 Trigo (WEAT)": "WEAT"
         }
-        sel_asset = st.selectbox("Seleccione un Activo:", list(ASSET_UNIVERSE.keys()))
+        
+        sel_asset = st.selectbox("Mercado:", list(ASSET_UNIVERSE.keys()), label_visibility="collapsed")
         if ASSET_UNIVERSE[sel_asset] == "HEADER": st.stop()
         ticker = st.text_input("...o ingrese Ticker Manual:", "").upper() or ASSET_UNIVERSE[sel_asset]
         
         st.divider()
-        st.header("2. Arquitectura de Simulación")
-        capital_inicial = st.number_input("Capital Base ($):", min_value=10.0, value=10000.0, step=1000.0)
+        st.header("2. Simulación de Capital")
+        moneda_sel = st.selectbox("Moneda Base:", ["USD ($)", "EUR (€)", "PEN (S/)"])
+        sym = moneda_sel.split(" ")[1].replace("(", "").replace(")", "")
+        capital_inicial = st.number_input("Capital a Invertir:", min_value=10.0, value=10000.0, step=1000.0)
+        
+        st.divider()
+        st.header("3. Arquitectura del Modelo")
         days_to_project = st.slider("Días de Proyección:", 10, 252, 21)
-        simulations = {"1k": 1000, "5k": 5000, "10k": 10000}[st.selectbox("Simulaciones:", ["1k", "5k", "10k"], index=2)]
+        simulations = {"1k": 1000, "5k": 5000, "10k": 10000}[st.selectbox("Simulaciones (Rutas):", ["1k", "5k", "10k"], index=2)]
         conf_level = st.slider("Límite VaR (%):", 90.0, 99.9, 95.0, 0.1)
 
     trading_days = 365 if "USD" in ticker else 252
@@ -98,7 +132,7 @@ def render_dashboard():
         df_hist = load_financial_data(ticker, "")
     except ValueError:
         df_hist = generate_synthetic_data(ticker, days=500, trading_days=trading_days)
-        st.error("🚨 **ALERTA CRÍTICA:** Conexión a mercado fallida o bloqueada. Desplegando simulación de contingencia.")
+        st.error("🚨 **ALERTA CRÍTICA:** Conexión a mercado fallida o bloqueada. Desplegando simulación teórica base.")
 
     if not df_hist.empty: df_hist = df_hist.iloc[:-21]
 
@@ -122,7 +156,7 @@ def render_dashboard():
     elif current_regime == 1: ml_lambda_j, ml_mu_j, ml_sigma_j = 1.0, 0.01, 0.02 
     else: ml_lambda_j, ml_mu_j, ml_sigma_j = 2.0, -0.03, 0.05
     
-    with st.spinner("Generación de Escenarios..."):
+    with st.spinner("Generación de Escenarios (Numba)..."):
         paths = run_montecarlo_advanced_stochastic(S0, current_mu, raw_mu, current_sigma_ann, long_term_sigma_ann, days_to_project, simulations, ml_lambda_j, ml_mu_j, ml_sigma_j, trading_days)
         prob_pos, var_price, median_price, tp_price = calculate_risk_metrics_phase1(S0, paths, conf_level)
         persistencia, durbin_watson, exceedance = calculate_model_diagnostics(daily_returns.values, regime_history, kalman_states)
@@ -153,14 +187,13 @@ def render_dashboard():
     with tab1:
         st.subheader(f"Plan de Ejecución ({days_to_project} días)")
         
-        # Cajas de Ejecución Clásicas Restauradas
         col_dir, col_tp, col_sl = st.columns(3)
         with col_dir:
             st.info(f"**DIRECTRIZ:**\n\n**{directriz}**\n\n*{justificacion}*")
         with col_tp:
-            st.success(f"**TAKE PROFIT:**\n\n**${tp_price:,.2f}**\n\n*Objetivo clínico superior.*")
+            st.success(f"**TAKE PROFIT:**\n\n**${tp_price:,.2f}**\n\n*Objetivo probabilístico.*")
         with col_sl:
-            st.error(f"**STOP-LOSS:**\n\n**${var_price:,.2f}**\n\n*Nivel de liquidación.*")
+            st.error(f"**TOUCH STOP-LOSS:**\n\n**${var_price:,.2f}**\n\n*Nivel crítico (VaR {conf_level}%).*")
 
         fig = go.Figure()
         for i in range(min(50, paths.shape[1])): fig.add_trace(go.Scatter(x=np.arange(days_to_project + 1), y=paths[:, i], mode='lines', line=dict(color='rgba(0, 100, 255, 0.08)'), showlegend=False))
@@ -170,11 +203,10 @@ def render_dashboard():
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
-        # MÉTRICAS DE CAPITAL RESTAURADAS
         cap1, cap2, cap3 = st.columns(3)
-        cap1.metric("Capital Invertido", f"${capital_inicial:,.2f}")
-        cap2.metric("Valor Esperado (Mediana)", f"${capital_esperado:,.2f}", f"{rend_esp:+,.2f}")
-        cap3.metric("Capital en Riesgo (VaR)", f"${capital_var:,.2f}", f"{rend_var:+,.2f}", delta_color="inverse")
+        cap1.metric(f"Capital Invertido ({sym})", f"{sym}{capital_inicial:,.2f}")
+        cap2.metric(f"Valor Esperado ({sym})", f"{sym}{capital_esperado:,.2f}", f"{sym}{rend_esp:+,.2f}")
+        cap3.metric(f"Capital en Riesgo ({sym})", f"{sym}{capital_var:,.2f}", f"{sym}{rend_var:+,.2f}", delta_color="inverse")
 
     with tab2:
         st.subheader("Traducción Clínica")
@@ -193,13 +225,13 @@ def render_dashboard():
     report_data = {
         "ticker": ticker, "S0": S0, "tp_price": tp_price, "var_price": var_price,
         "estado_ml": estado_ml_txt, "persistencia": persistencia, "exceedance": exceedance,
-        "conf_level": conf_level, "insights": insights, "directriz": directriz,
+        "conf_level": conf_level, "insights": insights, "sym": sym, "directriz": directriz,
         "capital_inicial": capital_inicial, "capital_esperado": capital_esperado, "capital_var": capital_var
     }
     
     with st.sidebar:
-        st.markdown("---")
-        st.download_button(label="📥 Descargar Reporte y Diagnóstico (PDF)", data=create_pdf_report(report_data), file_name=f"Quant_Report_{ticker}.pdf", mime="application/pdf", type="primary")
+        st.divider()
+        st.download_button(label="📥 Descargar Reporte y Diagnóstico (PDF)", data=create_pdf_report(report_data), file_name=f"Quant_Report_{ticker}.pdf", mime="application/pdf", type="primary", use_container_width=True)
 
 if __name__ == "__main__":
     render_dashboard()
