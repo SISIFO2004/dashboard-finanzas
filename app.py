@@ -20,7 +20,25 @@ session.headers.update({
 })
 
 # ==============================================================================
-# FASE 0: MOTOR DE INGESTA RESILIENTE Y ZERO-CORRUPTION
+# FASE 2: EXTRACCIÓN MACROECONÓMICA DINÁMICA
+# ==============================================================================
+
+@st.cache_data(ttl=43200, show_spinner=False) # Caché de 12 horas para datos macro
+def get_macro_context():
+    """Extrae las variables de entorno: Tasa Libre de Riesgo (^TNX) e Índice de Miedo (^VIX)"""
+    try:
+        tnx = yf.Ticker("^TNX", session=session).history(period="5d")
+        vix = yf.Ticker("^VIX", session=session).history(period="5d")
+        
+        # El bono cotiza en porcentaje (ej. 4.5), lo convertimos a decimal (0.045)
+        rf_rate = tnx['Close'].iloc[-1] / 100.0 if not tnx.empty else 0.045
+        vix_level = vix['Close'].iloc[-1] if not vix.empty else 20.0
+        return rf_rate, vix_level
+    except Exception:
+        return 0.045, 20.0 # Valores de contingencia (Fallback)
+
+# ==============================================================================
+# FASE 0 & 1: INGESTA RESILIENTE
 # ==============================================================================
 
 def generate_synthetic_data(ticker: str, days: int = 500, trading_days: int = 252) -> pd.DataFrame:
@@ -99,7 +117,44 @@ def load_financial_data(ticker: str, tiingo_key: str = "") -> pd.DataFrame:
     raise ValueError("Proveedores caídos o datos corruptos")
 
 # ==============================================================================
-# FASE 2: MOTOR MATEMÁTICO Y FILTROS ESTOCÁSTICOS
+# FASE 2: MOTOR DE INGENIERÍA DE CARACTERÍSTICAS (FEATURE ENGINEERING)
+# ==============================================================================
+
+def engineer_ml_features(df: pd.DataFrame, trading_days: int) -> pd.DataFrame:
+    """
+    Expande el DataFrame con variables técnicas, estadísticas y de momento.
+    Esta es la matriz de entrenamiento para el futuro modelo de Machine Learning.
+    """
+    df = df.copy()
+    
+    # 1. Retornos Clásicos
+    df['Returns'] = df['Close'].pct_change()
+    df['Log_Returns'] = np.log(df['Close'] / df['Close'].shift(1))
+    
+    # 2. Momentos Estadísticos de Distribución (Riesgo de Cola)
+    df['Rolling_Vol_20'] = df['Returns'].rolling(window=20).std() * np.sqrt(trading_days)
+    df['Realized_Vol_60'] = df['Returns'].rolling(window=60).std() * np.sqrt(trading_days)
+    df['Skewness_60'] = df['Returns'].rolling(window=60).skew()  # Asimetría
+    df['Kurtosis_60'] = df['Returns'].rolling(window=60).kurt()  # Colas pesadas
+    
+    # 3. Indicadores de Dinámica de Caos / Momento
+    # RSI (Relative Strength Index - 14 periodos)
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / (loss + 1e-8)
+    df['RSI_14'] = 100 - (100 / (1 + rs))
+    
+    # MACD (Moving Average Convergence Divergence)
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = ema12 - ema26
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    
+    return df.dropna()
+
+# ==============================================================================
+# FILTROS ESTOCÁSTICOS (KALMAN Y LOG-VOL)
 # ==============================================================================
 
 def apply_kalman_filter_dynamic(returns_array, divisor_inercia):
@@ -107,8 +162,7 @@ def apply_kalman_filter_dynamic(returns_array, divisor_inercia):
     R = np.var(returns_array)
     if R == 0: return np.full(n, returns_array[-1])
     Q = R / float(divisor_inercia) 
-    x_hat = np.zeros(n)
-    P = np.zeros(n)
+    x_hat, P = np.zeros(n), np.zeros(n)
     x_hat[0] = returns_array[0]
     P[0] = 1.0
     for k in range(1, n):
@@ -156,7 +210,7 @@ def apply_stochastic_volatility_filter(returns_array, q_variance=0.1):
     return np.clip(np.exp(h_hat / 2.0), 0.0001, 1.0)
 
 # ==============================================================================
-# FASE 0: SIMULACIÓN ACELERADA POR HARDWARE (NUMBA JIT)
+# SIMULACIÓN ACELERADA (NUMBA JIT)
 # ==============================================================================
 
 @njit
@@ -194,7 +248,7 @@ def run_montecarlo_advanced_stochastic(S0, current_mu, long_term_mu, current_sig
     return _jit_montecarlo_loop(price_paths, v_t, mu_t, days, simulations, dt, kappa_v, long_term_sigma, vol_v, Z_vol, kappa_mu, long_term_mu, vol_mu, Z_mu, Z_price, jump_returns)
 
 # ==============================================================================
-# FASE 1: SANEAMIENTO MATEMÁTICO DE RIESGO OPERATIVO
+# SANEAMIENTO MATEMÁTICO
 # ==============================================================================
 
 def calculate_risk_metrics_phase1(S0, paths, conf_level):
@@ -216,7 +270,7 @@ def generate_directive_common(prob_pos, days, rend_esp, tp_price, var_price, con
     return "Neutral", intro + f"• **Directriz:** RETENCIÓN / CONDICIÓN LATERAL. Riesgo simétrico.\n"
 
 # ==============================================================================
-# EXPORTACIÓN PDF (RESTAURADA)
+# EXPORTACIÓN PDF
 # ==============================================================================
 
 def create_pdf_report(data: dict) -> bytes:
@@ -226,7 +280,7 @@ def create_pdf_report(data: dict) -> bytes:
     pdf.set_font("Arial", 'B', 16)
     pdf.cell(0, 10, txt=f"REPORTE CUANTITATIVO: {data['ticker']}", ln=True, align='C')
     pdf.set_font("Arial", 'I', 10)
-    pdf.cell(0, 8, txt=f"Fecha: {datetime.datetime.now().strftime('%Y-%m-%d')} | Modelo: Estocastico Condicionado (Fase 1)", ln=True, align='C')
+    pdf.cell(0, 8, txt=f"Fecha: {datetime.datetime.now().strftime('%Y-%m-%d')} | Modelo: Hibrido Fase 2", ln=True, align='C')
     pdf.ln(5)
 
     pdf.set_font("Arial", 'B', 12)
@@ -249,7 +303,14 @@ def create_pdf_report(data: dict) -> bytes:
     pdf.ln(5)
 
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 8, txt=" 3. DIRECTRIZ INSTITUCIONAL", ln=True, fill=True)
+    pdf.cell(0, 8, txt=" 3. VARIABLES MACROECONOMICAS", ln=True, fill=True)
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 6, txt=f"   - Tasa Libre de Riesgo (^TNX): {data['rf_rate']*100:.2f}%", ln=True)
+    pdf.cell(0, 6, txt=f"   - Indice de Miedo (^VIX): {data['vix_level']:.2f}", ln=True)
+    pdf.ln(5)
+
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 8, txt=" 4. DIRECTRIZ INSTITUCIONAL", ln=True, fill=True)
     pdf.set_font("Arial", '', 10)
     clean_text = data['recomendacion'].replace('**', '').replace('•', '-')
     sustituciones = {'á':'a', 'é':'e', 'í':'i', 'ó':'o', 'ú':'u', 'Á':'A', 'É':'E', 'Í':'I', 'Ó':'O', 'Ú':'U'}
@@ -269,7 +330,11 @@ def create_pdf_report(data: dict) -> bytes:
 
 def render_dashboard():
     st.set_page_config(page_title="Quant Risk Engine", layout="wide", page_icon="📈")
-    st.title("📊 Motor Cuantitativo de Riesgo (Fase 1: Saneamiento Matemático)")
+    st.title("📊 Motor Cuantitativo de Riesgo (Fase 2: Datos y Macro)")
+
+    # FASE 2: Extracción Macro al inicio de la app
+    with st.spinner("Sincronizando Entorno Macroeconómico..."):
+        risk_free_rate, current_vix = get_macro_context()
 
     with st.sidebar:
         st.header("1. Datos y Conexión")
@@ -277,7 +342,6 @@ def render_dashboard():
         st.divider()
         st.header("2. Selección de Activo")
         
-        # UNIVERSO DE ACTIVOS RESTAURADO Y EXPANDIDO
         ASSET_UNIVERSE = {
             "🔍 Entrada Manual (Ticker)": "MANUAL",
             "--- ÍNDICES Y ETFS ---": "HEADER",
@@ -306,9 +370,8 @@ def render_dashboard():
         
         sel_asset = st.selectbox("Seleccione un Activo:", list(ASSET_UNIVERSE.keys()))
         
-        # PROTECCIÓN DE INTERFAZ: Previene errores si el usuario selecciona un "HEADER"
         if ASSET_UNIVERSE[sel_asset] == "HEADER":
-            st.warning("⚠️ Has seleccionado un separador de categoría. Por favor, selecciona un activo válido abajo.")
+            st.warning("⚠️ Selecciona un activo válido abajo.")
             st.stop()
             
         custom_asset = st.text_input("...o ingrese Ticker Manual:", "")
@@ -335,6 +398,9 @@ def render_dashboard():
     else:
         st.caption(f"✅ Conexión estable: {df_hist['Source'].iloc[0]} | Base temporal: {trading_days} días")
     
+    # FASE 2: Ingeniería de Características (Pipeline ML)
+    df_features = engineer_ml_features(df_hist, trading_days)
+    
     daily_returns = df_hist['Close'].pct_change().dropna()
     S0 = df_hist['Close'].iloc[-1]
     
@@ -353,7 +419,6 @@ def render_dashboard():
         current_sigma_ann = dynamic_sigma_daily[-1] * np.sqrt(trading_days)
         long_term_sigma_ann = np.mean(dynamic_sigma_daily) * np.sqrt(trading_days)
 
-    risk_free_rate = 0.045 
     downside_returns = daily_returns[daily_returns < 0]
     downside_sigma_ann = (downside_returns.std() * np.sqrt(trading_days)) if len(downside_returns) > 0 else current_sigma_ann
     sortino_ratio = (current_mu - risk_free_rate) / downside_sigma_ann if downside_sigma_ann > 0 else 0
@@ -366,11 +431,12 @@ def render_dashboard():
     capital_var = (capital_inicial / S0) * var_price
     rendimiento_esperado = capital_esperado - capital_inicial
     
+    # FASE 2: Modificación Visual (Agregando VIX)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Precio Base", f"${S0:,.2f}")
-    c2.metric("Drift Estabilizado (EWMA)", f"{current_mu*100:.1f}%")
-    c3.metric(f"Ratio de Sortino", f"{sortino_ratio:.2f}")
-    c4.metric("Volatilidad Dinámica", f"{current_sigma_ann*100:.1f}%")
+    c2.metric("Drift Estabilizado", f"{current_mu*100:.1f}%")
+    c3.metric(f"Sortino (TNX: {risk_free_rate*100:.2f}%)", f"{sortino_ratio:.2f}")
+    c4.metric("Volatilidad Dinámica", f"{current_sigma_ann*100:.1f}%", f"VIX: {current_vix:.1f}", delta_color="inverse")
 
     estado, recomendacion = generate_directive_common(prob_pos, days_to_project, rendimiento_esperado, tp_price, var_price, conf_level)
     
@@ -385,10 +451,17 @@ def render_dashboard():
     fig.add_trace(go.Scatter(x=[0, days_to_project], y=[var_price, var_price], mode='lines', name='Touch Stop-Loss (VaR)', line=dict(color='red', dash='dot')))
     st.plotly_chart(fig, use_container_width=True)
 
+    # FASE 2: VISUALIZADOR DE FEATURES PARA ML
+    st.markdown("---")
+    with st.expander("🔍 Laboratorio Cuantitativo: Matriz de Entrenamiento ML (Fase 2)", expanded=False):
+        st.caption("Estas son las variables estructuradas (Features) que alimentarán al Clasificador de Régimen en la Fase 3.")
+        st.dataframe(df_features.tail(10).style.format("{:.4f}").background_gradient(cmap='Blues'), use_container_width=True)
+
     return {
         "ticker": ticker, "S0": S0, "tp_price": tp_price, "var_price": var_price,
         "estado": estado, "recomendacion": recomendacion, "capital_inicial": capital_inicial,
-        "rendimiento_esperado": rendimiento_esperado, "capital_var": capital_var
+        "rendimiento_esperado": rendimiento_esperado, "capital_var": capital_var,
+        "rf_rate": risk_free_rate, "vix_level": current_vix
     }
 
 if __name__ == "__main__":
