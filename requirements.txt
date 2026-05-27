@@ -10,3 +10,4 @@ fpdf
 numba
 scipy
 scikit-learn
+matplotlib
