@@ -70,7 +70,7 @@ def load_financial_data(ticker: str, tiingo_key: str = "") -> pd.DataFrame:
                     df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
                     df = df.set_index('date').rename(columns={'close': 'Close'}).sort_index().tail(504)
                     cache_status = "Caché Local" if response.from_cache else "Internet"
-                    valid_df = validate_df(df[['Close']].copy(), f'Tiingo API ({cache_status})' )
+                    valid_df = validate_df(df[['Close']].copy(), f'Tiingo API ({cache_status})')
                     if not valid_df.empty: return valid_df
         except Exception: pass
 
@@ -198,14 +198,9 @@ def run_montecarlo_advanced_stochastic(S0, current_mu, long_term_mu, current_sig
 # ==============================================================================
 
 def calculate_risk_metrics_phase1(S0, paths, conf_level):
-    """
-    Cálculo de métricas robustas.
-    - VaR calculado sobre los precios MÍNIMOS que tocó el activo (Riesgo de Ruina Real).
-    """
     final_prices = paths[-1, :]
     prob_pos = np.mean(final_prices > S0)
     
-    # FASE 1: Touch VaR (Usa el valor más bajo alcanzado en CADA trayectoria)
     intra_period_mins = np.amin(paths, axis=0)
     var_price = np.percentile(intra_period_mins, 100 - conf_level)
     
@@ -221,6 +216,54 @@ def generate_directive_common(prob_pos, days, rend_esp, tp_price, var_price, con
     return "Neutral", intro + f"• **Directriz:** RETENCIÓN / CONDICIÓN LATERAL. Riesgo simétrico.\n"
 
 # ==============================================================================
+# EXPORTACIÓN PDF (RESTAURADA)
+# ==============================================================================
+
+def create_pdf_report(data: dict) -> bytes:
+    pdf = FPDF()
+    pdf.add_page()
+    
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, txt=f"REPORTE CUANTITATIVO: {data['ticker']}", ln=True, align='C')
+    pdf.set_font("Arial", 'I', 10)
+    pdf.cell(0, 8, txt=f"Fecha: {datetime.datetime.now().strftime('%Y-%m-%d')} | Modelo: Estocastico Condicionado (Fase 1)", ln=True, align='C')
+    pdf.ln(5)
+
+    pdf.set_font("Arial", 'B', 12)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(0, 8, txt=" 1. NIVELES OPERATIVOS", ln=True, fill=True)
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(0, 6, txt=f"   - ESTADO: {data['estado'].upper()}", ln=True)
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 6, txt=f"   - Entrada: ${data['S0']:.2f}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Take Profit: ${data['tp_price']:.2f}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Touch Stop-Loss (VaR): ${data['var_price']:.2f}", ln=True)
+    pdf.ln(5)
+
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 8, txt=" 2. EXPOSICION DE CAPITAL", ln=True, fill=True)
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 6, txt=f"   - Inversion Inicial: ${data['capital_inicial']:,.2f}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Retorno Esperado (Mediana): ${data['rendimiento_esperado']:+,.2f}", ln=True)
+    pdf.cell(0, 6, txt=f"   - Capital en Riesgo (VaR): ${data['capital_var']:,.2f}", ln=True)
+    pdf.ln(5)
+
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 8, txt=" 3. DIRECTRIZ INSTITUCIONAL", ln=True, fill=True)
+    pdf.set_font("Arial", '', 10)
+    clean_text = data['recomendacion'].replace('**', '').replace('•', '-')
+    sustituciones = {'á':'a', 'é':'e', 'í':'i', 'ó':'o', 'ú':'u', 'Á':'A', 'É':'E', 'Í':'I', 'Ó':'O', 'Ú':'U'}
+    for acento, sin_acento in sustituciones.items():
+        clean_text = clean_text.replace(acento, sin_acento)
+    for p in clean_text.split('\n'):
+        if p.strip():
+            pdf.multi_cell(0, 6, txt="   " + p.strip())
+            pdf.ln(1)
+
+    pdf_string = pdf.output(dest='S')
+    return pdf_string.encode('latin-1', errors='replace')
+
+# ==============================================================================
 # UI Y DASHBOARD
 # ==============================================================================
 
@@ -234,12 +277,40 @@ def render_dashboard():
         st.divider()
         st.header("2. Selección de Activo")
         
+        # UNIVERSO DE ACTIVOS RESTAURADO Y EXPANDIDO
         ASSET_UNIVERSE = {
             "🔍 Entrada Manual (Ticker)": "MANUAL",
-            "🇺🇸 Apple Inc. (AAPL)": "AAPL", "🇺🇸 NVIDIA Corp. (NVDA)": "NVDA", 
-            "₿ Bitcoin (BTC-USD)": "BTC-USD", "🥇 Oro (GLD)": "GLD"
+            "--- ÍNDICES Y ETFS ---": "HEADER",
+            "📊 S&P 500 ETF (SPY)": "SPY",
+            "📊 Nasdaq 100 ETF (QQQ)": "QQQ",
+            "--- TECNOLOGÍA (MAG 7) ---": "HEADER",
+            "🇺🇸 Apple Inc. (AAPL)": "AAPL",
+            "🇺🇸 Microsoft Corp. (MSFT)": "MSFT",
+            "🇺🇸 NVIDIA Corp. (NVDA)": "NVDA",
+            "🇺🇸 Alphabet Inc. (GOOGL)": "GOOGL",
+            "🇺🇸 Amazon.com Inc. (AMZN)": "AMZN",
+            "🇺🇸 Meta Platforms (META)": "META",
+            "🇺🇸 Tesla Inc. (TSLA)": "TSLA",
+            "--- FINANZAS E INDUSTRIA ---": "HEADER",
+            "🇺🇸 JPMorgan Chase (JPM)": "JPM",
+            "🇺🇸 Berkshire Hathaway (BRK-B)": "BRK-B",
+            "--- CRIPTOMONEDAS ---": "HEADER",
+            "₿ Bitcoin (BTC-USD)": "BTC-USD",
+            "⟠ Ethereum (ETH-USD)": "ETH-USD",
+            "☀️ Solana (SOL-USD)": "SOL-USD",
+            "--- MATERIAS PRIMAS ---": "HEADER",
+            "🥇 Oro ETF (GLD)": "GLD",
+            "🥈 Plata ETF (SLV)": "SLV",
+            "🛢️ Petróleo ETF (USO)": "USO"
         }
+        
         sel_asset = st.selectbox("Seleccione un Activo:", list(ASSET_UNIVERSE.keys()))
+        
+        # PROTECCIÓN DE INTERFAZ: Previene errores si el usuario selecciona un "HEADER"
+        if ASSET_UNIVERSE[sel_asset] == "HEADER":
+            st.warning("⚠️ Has seleccionado un separador de categoría. Por favor, selecciona un activo válido abajo.")
+            st.stop()
+            
         custom_asset = st.text_input("...o ingrese Ticker Manual:", "")
         ticker = custom_asset.upper() if custom_asset else ASSET_UNIVERSE[sel_asset]
         
@@ -273,19 +344,15 @@ def render_dashboard():
         mejor_divisor = optimize_kalman_filter(daily_returns.values)
         kalman_states = apply_kalman_filter_dynamic(daily_returns.values, mejor_divisor)
         
-        # FASE 1: Erradicación de Drift Instantáneo mediante EWMA sobre los estados filtrados
-        # Evita la hipersensibilidad anualizando un promedio ponderado de los últimos 20 días
         pesos_ewma = np.exp(np.linspace(-1, 0, min(20, len(kalman_states))))
         pesos_ewma /= pesos_ewma.sum()
         smoothed_kalman_return = np.dot(kalman_states[-len(pesos_ewma):], pesos_ewma)
         current_mu = smoothed_kalman_return * trading_days
         
-        # Filtro de Volatilidad
         dynamic_sigma_daily = apply_stochastic_volatility_filter(daily_returns.values)
         current_sigma_ann = dynamic_sigma_daily[-1] * np.sqrt(trading_days)
         long_term_sigma_ann = np.mean(dynamic_sigma_daily) * np.sqrt(trading_days)
 
-    # FASE 1: Ratio de Sortino Institucional (Downside Deviation)
     risk_free_rate = 0.045 
     downside_returns = daily_returns[daily_returns < 0]
     downside_sigma_ann = (downside_returns.std() * np.sqrt(trading_days)) if len(downside_returns) > 0 else current_sigma_ann
@@ -296,6 +363,8 @@ def render_dashboard():
         prob_pos, var_price, var_loss, cvar_price, median_price, tp_price = calculate_risk_metrics_phase1(S0, paths, conf_level)
 
     capital_esperado = (capital_inicial / S0) * median_price
+    capital_var = (capital_inicial / S0) * var_price
+    rendimiento_esperado = capital_esperado - capital_inicial
     
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Precio Base", f"${S0:,.2f}")
@@ -303,7 +372,7 @@ def render_dashboard():
     c3.metric(f"Ratio de Sortino", f"{sortino_ratio:.2f}")
     c4.metric("Volatilidad Dinámica", f"{current_sigma_ann*100:.1f}%")
 
-    estado, recomendacion = generate_directive_common(prob_pos, days_to_project, capital_esperado - capital_inicial, tp_price, var_price, conf_level)
+    estado, recomendacion = generate_directive_common(prob_pos, days_to_project, rendimiento_esperado, tp_price, var_price, conf_level)
     
     if estado == "Alcista": st.success(recomendacion)
     elif estado == "Bajista": st.error(recomendacion)
@@ -316,5 +385,23 @@ def render_dashboard():
     fig.add_trace(go.Scatter(x=[0, days_to_project], y=[var_price, var_price], mode='lines', name='Touch Stop-Loss (VaR)', line=dict(color='red', dash='dot')))
     st.plotly_chart(fig, use_container_width=True)
 
+    return {
+        "ticker": ticker, "S0": S0, "tp_price": tp_price, "var_price": var_price,
+        "estado": estado, "recomendacion": recomendacion, "capital_inicial": capital_inicial,
+        "rendimiento_esperado": rendimiento_esperado, "capital_var": capital_var
+    }
+
 if __name__ == "__main__":
-    render_dashboard()
+    report_data = render_dashboard()
+    if report_data:
+        with st.sidebar:
+            st.markdown("---")
+            with st.spinner("Compilando Reporte Institucional..."):
+                pdf_bytes = create_pdf_report(report_data)
+                st.download_button(
+                    label="📥 Descargar Reporte PDF",
+                    data=pdf_bytes,
+                    file_name=f"Quant_Risk_{report_data['ticker']}.pdf",
+                    mime="application/pdf",
+                    type="primary"
+                )
