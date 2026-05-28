@@ -14,6 +14,7 @@ from features.structural_engine import engineer_structural_features
 from models.inference_bgmm import identify_bayesian_regimes
 from simulation.stoch_generators import apply_auxiliary_particle_filter, apply_stochastic_volatility_filter, run_montecarlo_advanced_stochastic
 from diagnostics.model_governance import calculate_model_diagnostics, calculate_risk_metrics_phase1, generate_directive
+from diagnostics.backtest_engine import run_walk_forward_backtest
 
 # ==============================================================================
 # LÓGICA DE PDF Y SANITIZACIÓN INSTITUCIONAL
@@ -169,7 +170,6 @@ def render_dashboard():
     # --- INGESTA Y CONTINGENCIA ---
     try:
         df_hist = load_financial_data(ticker, "")
-        # Eliminado el recorte de backtest para sincronización exacta en tiempo real
     except Exception:
         df_hist = generate_synthetic_data(ticker, days=500, trading_days=trading_days)
         st.error("🚨 **ALERTA:** Conexión offline. Desplegando simulación teórica.")
@@ -230,7 +230,7 @@ def render_dashboard():
     c3.metric("Fricción VaR", f"{exceedance*100:.1f}%", delta_color="inverse")
     c4.metric("Deriva APF Ajustada", f"{current_mu*100:.1f}%")
 
-    tab1, tab2 = st.tabs(["📈 Proyección Generativa", "🔬 Auditoría de Manifold Histórico"])
+    tab1, tab2, tab3 = st.tabs(["📈 Proyección Generativa", "🔬 Auditoría de Manifold", "🧪 Backtest Walk-Forward"])
     
     with tab1:
         dir_t, just_t = generate_directive(prob_pos, current_regime)
@@ -288,6 +288,22 @@ def render_dashboard():
                 st.dataframe(df_trans.style.background_gradient(cmap='Blues'), use_container_width=True)
             except:
                 st.caption("Matriz en calibración...")
+
+    with tab3:
+        st.markdown("### Rendimiento Histórico (Walk-Forward)")
+        if st.button("Ejecutar Backtest"):
+            with st.spinner("Calculando trayectoria histórica..."):
+                bt_results = run_walk_forward_backtest(df_hist)
+                cum_pnl = bt_results['Pnl'].cumsum()
+                
+                fig_bt = go.Figure()
+                fig_bt.add_trace(go.Scatter(x=cum_pnl.index, y=cum_pnl, name="Estrategia IA", line=dict(color='green')))
+                fig_bt.update_layout(title="Curva de Capital Acumulado (Backtest)", height=300)
+                st.plotly_chart(fig_bt, use_container_width=True)
+                
+                c_win, c_sharpe = st.columns(2)
+                c_win.metric("Win Rate", f"{(bt_results['Pnl'] > 0).mean()*100:.1f}%")
+                c_sharpe.metric("Sharpe Ratio", f"{bt_results['Pnl'].mean() / bt_results['Pnl'].std() * np.sqrt(252):.2f}")
 
     # --- EXPORTACIÓN DE REPORTE INSTITUCIONAL ---
     report_data = {
