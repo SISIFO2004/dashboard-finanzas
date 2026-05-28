@@ -1,11 +1,11 @@
 import numpy as np
 
-def calculate_model_diagnostics(returns_array, mapped_regimes_history, kalman_states):
+def calculate_model_diagnostics(returns_array, mapped_regimes_history, apf_states):
     regime_changes = np.diff(mapped_regimes_history) != 0
     num_changes = np.sum(regime_changes)
     persistence_days = len(mapped_regimes_history) / (num_changes + 1) if num_changes > 0 else len(mapped_regimes_history)
     
-    residuals = returns_array[-len(kalman_states):] - kalman_states
+    residuals = returns_array[-len(apf_states):] - apf_states
     dw_stat = np.sum(np.diff(residuals)**2) / np.sum(residuals**2) if np.sum(residuals**2) != 0 else 0
     
     var_95_hist = np.percentile(returns_array, 5)
