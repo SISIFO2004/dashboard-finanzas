@@ -63,6 +63,16 @@ def create_pdf_report(data: dict) -> bytes:
     pdf.multi_cell(0, 6, txt=clean_text_for_pdf(f"DIRECTRIZ INSTITUCIONAL: {data['directriz']} - {data['justificacion']}"))
     return pdf.output(dest='S').encode('latin-1', errors='replace')
 
+# ESTA ES LA FUNCIÓN QUE PROBABLEMENTE FALTABA EN TU ARCHIVO
+def interpret_structural_features(latest_features: pd.Series) -> list:
+    insights = []
+    if latest_features['Kurtosis_20'] > 3.0: insights.append("⚠️ **Alerta de Cisne Negro:** Alta Kurtosis. Riesgo de shocks extremos.")
+    if latest_features['DD_Velocity'] < -0.05: insights.append("📉 **Aceleración Bajista:** Drawdown acelerado. Riesgo de liquidación.")
+    if latest_features['Realized_Vol_20'] > 0.40 and latest_features['Returns'] > 0: insights.append("🔥 **Melt-Up:** Euforia volátil detectada.")
+    if 'Entropy_20' in latest_features and latest_features['Entropy_20'] > 2.0: insights.append("🌪️ **Alta Entropía:** Mercado desordenado.")
+    if not insights: insights.append("✅ **Estructura Nominal:** Métricas operativas estables.")
+    return insights
+
 # ==============================================================================
 # ORQUESTADOR UI (FULL-STACK QUANT)
 # ==============================================================================
@@ -149,7 +159,6 @@ def render_dashboard():
     if override_ia:
         ml_lambda_j, ml_mu_j, ml_sigma_j = manual_lambda, manual_mu, manual_sigma
     else:
-        # Extracción matemática del dict de calibración del régimen actual
         vi_params = calib_params.get(current_regime, {'lambda_j': 1.0, 'mu_regime': -0.01, 'sigma_regime': 0.05})
         ml_lambda_j = max(0.1, vi_params['lambda_j']) 
         ml_mu_j = np.clip(vi_params['mu_regime'], -0.20, 0.20)
