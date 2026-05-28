@@ -12,7 +12,7 @@ from fpdf import FPDF
 from core.data_ingestion import get_macro_context, load_financial_data, generate_synthetic_data
 from features.structural_engine import engineer_structural_features
 from models.inference_bgmm import identify_bayesian_regimes
-from simulation.stoch_generators import apply_kalman_filter_dynamic, apply_stochastic_volatility_filter, run_montecarlo_advanced_stochastic
+from simulation.stoch_generators import apply_auxiliary_particle_filter, apply_stochastic_volatility_filter, run_montecarlo_advanced_stochastic
 from diagnostics.model_governance import calculate_model_diagnostics, calculate_risk_metrics_phase1, generate_directive
 
 # ==============================================================================
@@ -117,27 +117,27 @@ def render_dashboard():
         df_hist = generate_synthetic_data(ticker, days=500, trading_days=trading_days)
         st.error("🚨 **ALERTA CRÍTICA:** Conexión offline. Desplegando simulación sintética.")
 
-    # ------------------ PIPELINE IA VARIACIONAL ------------------
+    # ------------------ PIPELINE IA VARIACIONAL (FASE 2) ------------------
     with st.spinner("Inferencia Variacional (Auto-Calibración)..."):
         df_features = engineer_structural_features(df_hist, trading_days)
-        # DESEMPAQUETADO ACTUALIZADO (FASE 2)
         current_regime, feature_list, regime_history, calib_params, trans_matrix = identify_bayesian_regimes(df_features)
     
     daily_returns = df_hist['Close'].pct_change().dropna()
     S0 = df_hist['Close'].iloc[-1]
     raw_mu = daily_returns.mean() * trading_days
     
-    # ------------------ FILTROS MATEMÁTICOS (PRE-FASE 3) ------------------
-    with st.spinner("Calibrando Filtros Matemáticos..."):
-        kalman_states = apply_kalman_filter_dynamic(daily_returns.values, 100)
-        pesos_ewma = np.exp(np.linspace(-1, 0, min(20, len(kalman_states))))
-        current_mu = np.dot(kalman_states[-len(pesos_ewma):], pesos_ewma / pesos_ewma.sum()) * trading_days
+    # ------------------ FILTROS MATEMÁTICOS EXTREMOS (FASE 3) ------------------
+    with st.spinner("Desplegando Filtro de Partículas Auxiliar..."):
+        # Se reemplaza Kalman por APF para extraer la tendencia aislando colas pesadas
+        apf_states = apply_auxiliary_particle_filter(daily_returns.values, num_particles=1000)
+        pesos_ewma = np.exp(np.linspace(-1, 0, min(20, len(apf_states))))
+        current_mu = np.dot(apf_states[-len(pesos_ewma):], pesos_ewma / pesos_ewma.sum()) * trading_days
         
         dynamic_sigma_daily = apply_stochastic_volatility_filter(daily_returns.values)
         current_sigma_ann = dynamic_sigma_daily[-1] * np.sqrt(trading_days)
         long_term_sigma_ann = np.mean(dynamic_sigma_daily) * np.sqrt(trading_days)
 
-    # Parche de transición: Mantenemos la lógica de saltos estable antes de reescribir Numba
+    # Parche de transición: Lógica estable hasta introducir proceso Hawkes (Fase 4)
     if current_regime == -1: ml_lambda_j, ml_mu_j, ml_sigma_j = 6.0, -0.08, 0.08 
     elif current_regime == 1: ml_lambda_j, ml_mu_j, ml_sigma_j = 1.0, 0.01, 0.02 
     else: ml_lambda_j, ml_mu_j, ml_sigma_j = 2.0, -0.03, 0.05
@@ -146,7 +146,7 @@ def render_dashboard():
     with st.spinner("Generación de Escenarios Estocásticos..."):
         paths = run_montecarlo_advanced_stochastic(S0, current_mu, raw_mu, current_sigma_ann, long_term_sigma_ann, days_to_project, simulations, ml_lambda_j, ml_mu_j, ml_sigma_j, trading_days)
         prob_pos, var_price, median_price, tp_price = calculate_risk_metrics_phase1(S0, paths, conf_level)
-        persistencia, durbin_watson, exceedance = calculate_model_diagnostics(daily_returns.values, regime_history, kalman_states)
+        persistencia, durbin_watson, exceedance = calculate_model_diagnostics(daily_returns.values, regime_history, apf_states)
 
     # ------------------ CÁLCULOS DE CAPITAL Y UI ------------------
     capital_esperado = (capital_inicial / S0) * median_price
