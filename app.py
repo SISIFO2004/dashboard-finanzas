@@ -63,13 +63,12 @@ def create_pdf_report(data: dict) -> bytes:
     pdf.multi_cell(0, 6, txt=clean_text_for_pdf(f"DIRECTRIZ INSTITUCIONAL: {data['directriz']} - {data['justificacion']}"))
     return pdf.output(dest='S').encode('latin-1', errors='replace')
 
-# ESTA ES LA FUNCIÓN QUE PROBABLEMENTE FALTABA EN TU ARCHIVO
 def interpret_structural_features(latest_features: pd.Series) -> list:
     insights = []
     if latest_features['Kurtosis_20'] > 3.0: insights.append("⚠️ **Alerta de Cisne Negro:** Alta Kurtosis. Riesgo de shocks extremos.")
-    if latest_features['DD_Velocity'] < -0.05: insights.append("📉 **Aceleración Bajista:** Drawdown acelerado. Riesgo de liquidación.")
+    if latest_features['DD_Velocity'] < -0.05: insights.append("📉 **Aceleración Bajista:** Drawdown acelerado. Riesgo de liquidación en cascada.")
     if latest_features['Realized_Vol_20'] > 0.40 and latest_features['Returns'] > 0: insights.append("🔥 **Melt-Up:** Euforia volátil detectada.")
-    if 'Entropy_20' in latest_features and latest_features['Entropy_20'] > 2.0: insights.append("🌪️ **Alta Entropía:** Mercado desordenado.")
+    if 'Entropy_20' in latest_features and latest_features['Entropy_20'] > 2.0: insights.append("🌪️ **Alta Entropía:** Mercado desordenado. Baja predictibilidad.")
     if not insights: insights.append("✅ **Estructura Nominal:** Métricas operativas estables.")
     return insights
 
@@ -131,7 +130,7 @@ def render_dashboard():
     # --- INGESTA Y CONTINGENCIA ---
     try:
         df_hist = load_financial_data(ticker, "")
-        if not df_hist.empty: df_hist = df_hist.iloc[:-21]
+        # Eliminado el recorte (iloc[:-21]) para sincronización exacta en tiempo real
     except Exception:
         df_hist = generate_synthetic_data(ticker, days=500, trading_days=trading_days)
         st.error("🚨 **ALERTA:** Conexión offline. Desplegando simulación teórica.")
