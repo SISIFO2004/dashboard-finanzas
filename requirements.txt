@@ -11,3 +11,4 @@ numba
 scipy
 scikit-learn
 matplotlib
+statsmodels
