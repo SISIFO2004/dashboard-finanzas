@@ -93,19 +93,58 @@ def render_dashboard():
     with st.sidebar:
         st.header("1. Configuración de Activo")
         ASSET_UNIVERSE = {
-            "🔍 Manual": "MANUAL", 
-            "--- INDICES & TECNOLOGIA ---": "HEADER",
-            "📊 S&P 500 (SPY)": "SPY", "📊 Nasdaq 100 (QQQ)": "QQQ",
-            "🇺🇸 NVIDIA (NVDA)": "NVDA", "🇺🇸 Apple (AAPL)": "AAPL",
-            "--- EMERGENTES ---": "HEADER",
-            "🇵🇪 Credicorp (BAP)": "BAP", "🇧🇷 iShares Brazil (EWZ)": "EWZ",
-            "--- CRYPTO & COMMODITIES ---": "HEADER",
-            "₿ Bitcoin (BTC-USD)": "BTC-USD", "⟠ Ethereum (ETH-USD)": "ETH-USD",
-            "🥇 Oro (GLD)": "GLD", "🥈 Plata (SLV)": "SLV"
+            "🔍 Entrada Manual (Ticker)": "MANUAL",
+            
+            "--- ÍNDICES GLOBALES ---": "HEADER",
+            "📊 S&P 500 ETF (SPY)": "SPY", 
+            "📊 Nasdaq 100 (QQQ)": "QQQ", 
+            "📊 Russell 2000 (IWM)": "IWM", 
+            "📊 Dow Jones (DIA)": "DIA",
+            
+            "--- MERCADO PERUANO (ADRs & ETFs) ---": "HEADER",
+            "🇵🇪 iShares MSCI Peru ETF (EPU)": "EPU",
+            "🇵🇪 Credicorp Ltd. (BAP)": "BAP", 
+            "🇵🇪 Cia. de Minas Buenaventura (BVN)": "BVN", 
+            "🇵🇪 Southern Copper (SCCO)": "SCCO", 
+            "🇵🇪 Intercorp Financial (IFS)": "IFS", 
+            "🇵🇪 Cementos Pacasmayo (CPAC)": "CPAC", 
+            
+            "--- OTROS EMERGENTES ---": "HEADER",
+            "🇧🇷 iShares MSCI Brazil (EWZ)": "EWZ", 
+            "🇲🇽 iShares MSCI Mexico (EWW)": "EWW",
+            "🇦🇷 Grupo Financiero Galicia (GGAL)": "GGAL",
+            
+            "--- TECNOLOGÍA (MAG 7) ---": "HEADER",
+            "🇺🇸 NVIDIA (NVDA)": "NVDA", 
+            "🇺🇸 Apple (AAPL)": "AAPL", 
+            "🇺🇸 Microsoft (MSFT)": "MSFT", 
+            "🇺🇸 Alphabet (GOOGL)": "GOOGL", 
+            "🇺🇸 Amazon (AMZN)": "AMZN", 
+            "🇺🇸 Meta (META)": "META", 
+            "🇺🇸 Tesla (TSLA)": "TSLA",
+            
+            "--- FINANZAS & BLUE CHIPS ---": "HEADER",
+            "🇺🇸 JPMorgan (JPM)": "JPM", 
+            "🇺🇸 Berkshire Hathaway (BRK-B)": "BRK-B", 
+            "🇺🇸 Visa (V)": "V", 
+            "🇺🇸 Johnson & Johnson (JNJ)": "JNJ",
+            
+            "--- CRIPTOMONEDAS ---": "HEADER",
+            "₿ Bitcoin (BTC-USD)": "BTC-USD", 
+            "⟠ Ethereum (ETH-USD)": "ETH-USD", 
+            "☀️ Solana (SOL-USD)": "SOL-USD", 
+            "💠 Cardano (ADA-USD)": "ADA-USD",
+            
+            "--- MATERIAS PRIMAS ---": "HEADER",
+            "🥇 Oro (GLD)": "GLD", 
+            "🥈 Plata (SLV)": "SLV", 
+            "🛢️ Petróleo Crudo (USO)": "USO", 
+            "🥉 Cobre (COPX)": "COPX",
+            "🌾 Trigo (WEAT)": "WEAT"
         }
-        sel_asset = st.selectbox("Mercado:", list(ASSET_UNIVERSE.keys()))
+        sel_asset = st.selectbox("Mercado:", list(ASSET_UNIVERSE.keys()), label_visibility="collapsed")
         if ASSET_UNIVERSE[sel_asset] == "HEADER": st.stop()
-        ticker = st.text_input("Ticker:", "").upper() or ASSET_UNIVERSE[sel_asset]
+        ticker = st.text_input("...o ingrese Ticker Manual:", "").upper() or ASSET_UNIVERSE[sel_asset]
         
         st.divider()
         st.header("2. Arquitectura Estocástica")
@@ -130,7 +169,7 @@ def render_dashboard():
     # --- INGESTA Y CONTINGENCIA ---
     try:
         df_hist = load_financial_data(ticker, "")
-        # Eliminado el recorte (iloc[:-21]) para sincronización exacta en tiempo real
+        # Eliminado el recorte de backtest para sincronización exacta en tiempo real
     except Exception:
         df_hist = generate_synthetic_data(ticker, days=500, trading_days=trading_days)
         st.error("🚨 **ALERTA:** Conexión offline. Desplegando simulación teórica.")
