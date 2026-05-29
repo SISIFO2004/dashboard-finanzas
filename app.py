@@ -15,7 +15,6 @@ from models.inference_bgmm import identify_bayesian_regimes
 from simulation.stoch_generators import apply_auxiliary_particle_filter, apply_stochastic_volatility_filter, run_montecarlo_advanced_stochastic
 from diagnostics.model_governance import calculate_model_diagnostics, calculate_risk_metrics_phase1, generate_directive
 
-# IMPORTANTE: Asegúrate de tener diagnostics/backtest_engine.py con run_walk_forward_backtest
 try:
     from diagnostics.backtest_engine import run_walk_forward_backtest
 except ImportError:
@@ -26,7 +25,7 @@ except ImportError:
 # ==============================================================================
 def clean_text_for_pdf(text):
     text = str(text)
-    for e in ['🔴', '🟢', '⚪', '⚠️', '🛡️', '📉', '🔥', '🌪️', '✅', '⚙️', '🔬', '📊', '🧬', '📥', '⏱️', '🧪']: 
+    for e in ['🔴', '🟢', '⚪', '⚠️', '🛡️', '📉', '🔥', '🌪️', '✅', '⚙️', '🔬', '📊', '🧬', '📥', '⏱️', '🧪', '💰']: 
         text = text.replace(e, '')
     return unicodedata.normalize('NFKD', text).encode('latin-1', 'ignore').decode('latin-1').strip()
 
@@ -82,12 +81,10 @@ def interpret_structural_features(latest_features: pd.Series) -> list:
 # MOTOR DEL TIEMPO (RETROSPECTIVO)
 # ==============================================================================
 def run_time_machine(df_full, days_ago, simulations, trading_days):
-    # Cortamos la historia para aislar el modelo en el pasado
     idx_split = -days_ago
     df_past = df_full.iloc[:idx_split]
     df_future = df_full.iloc[idx_split:]
     
-    # 1. Re-entrenamiento Variacional en el pasado
     df_features = engineer_structural_features(df_past, trading_days)
     current_regime, _, _, calib_params, _ = identify_bayesian_regimes(df_features)
     
@@ -95,7 +92,6 @@ def run_time_machine(df_full, days_ago, simulations, trading_days):
     S0 = df_past['Close'].iloc[-1]
     raw_mu = daily_returns.mean() * trading_days
     
-    # 2. Filtrado APF hasta ese día
     apf_states = apply_auxiliary_particle_filter(daily_returns.values, num_particles=1000)
     pesos_ewma = np.exp(np.linspace(-1, 0, min(20, len(apf_states))))
     current_mu = np.dot(apf_states[-len(pesos_ewma):], pesos_ewma / pesos_ewma.sum()) * trading_days
@@ -109,7 +105,6 @@ def run_time_machine(df_full, days_ago, simulations, trading_days):
     ml_mu_j = np.clip(vi_params['mu_regime'], -0.20, 0.20)
     ml_sigma_j = np.clip(vi_params['sigma_regime'], 0.01, 0.30)
     
-    # 3. Proyección ciega hacia adelante
     paths = run_montecarlo_advanced_stochastic(
         S0, current_mu, raw_mu, current_sigma_ann, long_term_sigma_ann, 
         days_ago, simulations, ml_lambda_j, ml_mu_j, ml_sigma_j, trading_days
@@ -270,25 +265,65 @@ def render_dashboard():
                     fig_bt.add_trace(go.Scatter(x=cum_pnl.index, y=cum_pnl, line=dict(color='green')))
                     st.plotly_chart(fig_bt, use_container_width=True)
         else:
-            st.warning("El módulo de backtest_engine.py no está disponible.")
+            st.warning("El módulo de backtest no está disponible.")
 
     with tab4:
         st.markdown(f"### Validación Empírica: {days_ago} días al pasado")
-        st.write("Aisla a la IA en el pasado y compara su predicción ciega contra lo que realmente ocurrió.")
+        st.write("Aísla a la IA en el pasado y compara su predicción ciega contra el rendimiento del capital real.")
         
         if st.button(f"Ejecutar Máquina del Tiempo (-{days_ago}d)"):
-            with st.spinner("Rebobinando y re-calculando universo..."):
+            with st.spinner("Rebobinando mercado y calculando PnL histórico..."):
                 real_prices, retro_paths, past_S0, future_dates = run_time_machine(df_hist, days_ago, simulations, trading_days)
                 
-                # Para limpiar el gráfico, tomaremos la Mediana y el VaR del 5% y 95% de las proyecciones
                 median_path = np.median(retro_paths, axis=1)
                 upper_bound = np.percentile(retro_paths, 95, axis=1)
                 lower_bound = np.percentile(retro_paths, 5, axis=1)
                 
-                fig_time = go.Figure()
+                # ==========================================================
+                # CÁLCULOS FINANCIEROS
+                # ==========================================================
+                current_real_price = real_prices[-1]
+                projected_final_price = median_path[-1]
                 
-                # 1. El cono de incertidumbre de nuestro modelo
+                shares_bought = capital_inicial / past_S0 
+                
+                actual_final_capital = shares_bought * current_real_price
+                actual_pnl = actual_final_capital - capital_inicial
+                actual_pnl_pct = (actual_pnl / capital_inicial) * 100
+                
+                projected_final_capital = shares_bought * projected_final_price
+                projected_pnl = projected_final_capital - capital_inicial
+                projected_error_margin = abs(actual_final_capital - projected_final_capital)
+                
+                st.markdown("#### 💰 Auditoría de Capital (Realidad vs. Modelo)")
+                col_retro1, col_retro2, col_retro3 = st.columns(3)
+                
+                col_retro1.metric(
+                    label=f"Inversión hace {days_ago}d (Precio: ${past_S0:,.2f})",
+                    value=f"{sym}{capital_inicial:,.2f}",
+                    help=f"Equivale a {shares_bought:,.4f} unidades del activo."
+                )
+                col_retro2.metric(
+                    label=f"Capital Hoy REAL (Precio: ${current_real_price:,.2f})",
+                    value=f"{sym}{actual_final_capital:,.2f}",
+                    delta=f"{sym}{actual_pnl:+,.2f} ({actual_pnl_pct:+.2f}%)",
+                    delta_color="normal"
+                )
+                col_retro3.metric(
+                    label=f"Capital PROYECTADO (Precio: ${projected_final_price:,.2f})",
+                    value=f"{sym}{projected_final_capital:,.2f}",
+                    delta=f"Margen de Error: {sym}{projected_error_margin:,.2f}",
+                    delta_color="off"
+                )
+                
+                st.divider()
+                
+                # ==========================================================
+                # RENDERIZADO DEL MANIFOLD (GRÁFICA)
+                # ==========================================================
+                fig_time = go.Figure()
                 x_axis = np.arange(len(median_path))
+                
                 fig_time.add_trace(go.Scatter(
                     x=np.concatenate([x_axis, x_axis[::-1]]),
                     y=np.concatenate([upper_bound, lower_bound[::-1]]),
@@ -296,11 +331,8 @@ def render_dashboard():
                     name="Cono de Probabilidad (IA)"
                 ))
                 
-                # 2. La mediana proyectada
                 fig_time.add_trace(go.Scatter(x=x_axis, y=median_path, mode='lines', line=dict(color='blue', dash='dash'), name='Mediana Proyectada'))
                 
-                # 3. La dura realidad (hasta los días disponibles)
-                # Alineamos los arrays (el real_prices puede tener menos días si hay fines de semana)
                 limit = min(len(x_axis), len(real_prices))
                 fig_time.add_trace(go.Scatter(x=x_axis[:limit], y=real_prices[:limit], mode='lines', line=dict(color='black', width=3), name='Realidad Empírica'))
                 
