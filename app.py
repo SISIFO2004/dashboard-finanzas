@@ -14,14 +14,19 @@ from features.structural_engine import engineer_structural_features
 from models.inference_bgmm import identify_bayesian_regimes
 from simulation.stoch_generators import apply_auxiliary_particle_filter, apply_stochastic_volatility_filter, run_montecarlo_advanced_stochastic
 from diagnostics.model_governance import calculate_model_diagnostics, calculate_risk_metrics_phase1, generate_directive
-from diagnostics.backtest_engine import run_walk_forward_backtest
+
+# IMPORTANTE: Asegúrate de tener diagnostics/backtest_engine.py con run_walk_forward_backtest
+try:
+    from diagnostics.backtest_engine import run_walk_forward_backtest
+except ImportError:
+    run_walk_forward_backtest = None
 
 # ==============================================================================
 # LÓGICA DE PDF Y SANITIZACIÓN INSTITUCIONAL
 # ==============================================================================
 def clean_text_for_pdf(text):
     text = str(text)
-    for e in ['🔴', '🟢', '⚪', '⚠️', '🛡️', '📉', '🔥', '🌪️', '✅', '⚙️', '🔬', '📊', '🧬', '📥']: 
+    for e in ['🔴', '🟢', '⚪', '⚠️', '🛡️', '📉', '🔥', '🌪️', '✅', '⚙️', '🔬', '📊', '🧬', '📥', '⏱️', '🧪']: 
         text = text.replace(e, '')
     return unicodedata.normalize('NFKD', text).encode('latin-1', 'ignore').decode('latin-1').strip()
 
@@ -74,12 +79,50 @@ def interpret_structural_features(latest_features: pd.Series) -> list:
     return insights
 
 # ==============================================================================
+# MOTOR DEL TIEMPO (RETROSPECTIVO)
+# ==============================================================================
+def run_time_machine(df_full, days_ago, simulations, trading_days):
+    # Cortamos la historia para aislar el modelo en el pasado
+    idx_split = -days_ago
+    df_past = df_full.iloc[:idx_split]
+    df_future = df_full.iloc[idx_split:]
+    
+    # 1. Re-entrenamiento Variacional en el pasado
+    df_features = engineer_structural_features(df_past, trading_days)
+    current_regime, _, _, calib_params, _ = identify_bayesian_regimes(df_features)
+    
+    daily_returns = df_past['Close'].pct_change().dropna()
+    S0 = df_past['Close'].iloc[-1]
+    raw_mu = daily_returns.mean() * trading_days
+    
+    # 2. Filtrado APF hasta ese día
+    apf_states = apply_auxiliary_particle_filter(daily_returns.values, num_particles=1000)
+    pesos_ewma = np.exp(np.linspace(-1, 0, min(20, len(apf_states))))
+    current_mu = np.dot(apf_states[-len(pesos_ewma):], pesos_ewma / pesos_ewma.sum()) * trading_days
+    
+    dynamic_sigma = apply_stochastic_volatility_filter(daily_returns.values)
+    current_sigma_ann = dynamic_sigma[-1] * np.sqrt(trading_days)
+    long_term_sigma_ann = np.mean(dynamic_sigma) * np.sqrt(trading_days)
+    
+    vi_params = calib_params.get(current_regime, {'lambda_j': 1.0, 'mu_regime': -0.01, 'sigma_regime': 0.05})
+    ml_lambda_j = max(0.1, vi_params['lambda_j']) 
+    ml_mu_j = np.clip(vi_params['mu_regime'], -0.20, 0.20)
+    ml_sigma_j = np.clip(vi_params['sigma_regime'], 0.01, 0.30)
+    
+    # 3. Proyección ciega hacia adelante
+    paths = run_montecarlo_advanced_stochastic(
+        S0, current_mu, raw_mu, current_sigma_ann, long_term_sigma_ann, 
+        days_ago, simulations, ml_lambda_j, ml_mu_j, ml_sigma_j, trading_days
+    )
+    
+    return df_future['Close'].values, paths, S0, df_future.index
+
+# ==============================================================================
 # ORQUESTADOR UI (FULL-STACK QUANT)
 # ==============================================================================
 def render_dashboard():
     st.set_page_config(page_title="Quant Lab | Dinámica Estocástica", layout="wide", page_icon="🧬")
     
-    # --- RADAR MACROECONÓMICO (CONTEXTO SISTÉMICO) ---
     with st.spinner("Sincronizando Radar Macro..."):
         risk_free_rate, current_vix = get_macro_context()
         
@@ -90,58 +133,19 @@ def render_dashboard():
     col_m3.metric("Entorno Cuantitativo", "Contracción" if risk_free_rate > 4.5 and current_vix > 20 else "Expansión")
     st.divider()
 
-    # --- PANEL LATERAL: CONFIGURACIÓN Y OVERRIDE ---
     with st.sidebar:
         st.header("1. Configuración de Activo")
         ASSET_UNIVERSE = {
             "🔍 Entrada Manual (Ticker)": "MANUAL",
-            
             "--- ÍNDICES GLOBALES ---": "HEADER",
-            "📊 S&P 500 ETF (SPY)": "SPY", 
-            "📊 Nasdaq 100 (QQQ)": "QQQ", 
-            "📊 Russell 2000 (IWM)": "IWM", 
-            "📊 Dow Jones (DIA)": "DIA",
-            
-            "--- MERCADO PERUANO (ADRs & ETFs) ---": "HEADER",
-            "🇵🇪 iShares MSCI Peru ETF (EPU)": "EPU",
-            "🇵🇪 Credicorp Ltd. (BAP)": "BAP", 
-            "🇵🇪 Cia. de Minas Buenaventura (BVN)": "BVN", 
-            "🇵🇪 Southern Copper (SCCO)": "SCCO", 
-            "🇵🇪 Intercorp Financial (IFS)": "IFS", 
-            "🇵🇪 Cementos Pacasmayo (CPAC)": "CPAC", 
-            
-            "--- OTROS EMERGENTES ---": "HEADER",
-            "🇧🇷 iShares MSCI Brazil (EWZ)": "EWZ", 
-            "🇲🇽 iShares MSCI Mexico (EWW)": "EWW",
-            "🇦🇷 Grupo Financiero Galicia (GGAL)": "GGAL",
-            
-            "--- TECNOLOGÍA (MAG 7) ---": "HEADER",
-            "🇺🇸 NVIDIA (NVDA)": "NVDA", 
-            "🇺🇸 Apple (AAPL)": "AAPL", 
-            "🇺🇸 Microsoft (MSFT)": "MSFT", 
-            "🇺🇸 Alphabet (GOOGL)": "GOOGL", 
-            "🇺🇸 Amazon (AMZN)": "AMZN", 
-            "🇺🇸 Meta (META)": "META", 
-            "🇺🇸 Tesla (TSLA)": "TSLA",
-            
-            "--- FINANZAS & BLUE CHIPS ---": "HEADER",
-            "🇺🇸 JPMorgan (JPM)": "JPM", 
-            "🇺🇸 Berkshire Hathaway (BRK-B)": "BRK-B", 
-            "🇺🇸 Visa (V)": "V", 
-            "🇺🇸 Johnson & Johnson (JNJ)": "JNJ",
-            
+            "📊 S&P 500 ETF (SPY)": "SPY", "📊 Nasdaq 100 (QQQ)": "QQQ", 
+            "--- MERCADO PERUANO ---": "HEADER",
+            "🇵🇪 iShares MSCI Peru ETF (EPU)": "EPU", "🇵🇪 Credicorp Ltd. (BAP)": "BAP", 
+            "🇵🇪 Southern Copper (SCCO)": "SCCO", "🇵🇪 Intercorp Financial (IFS)": "IFS", 
+            "--- TECNOLOGÍA ---": "HEADER",
+            "🇺🇸 NVIDIA (NVDA)": "NVDA", "🇺🇸 Apple (AAPL)": "AAPL", "🇺🇸 Tesla (TSLA)": "TSLA",
             "--- CRIPTOMONEDAS ---": "HEADER",
-            "₿ Bitcoin (BTC-USD)": "BTC-USD", 
-            "⟠ Ethereum (ETH-USD)": "ETH-USD", 
-            "☀️ Solana (SOL-USD)": "SOL-USD", 
-            "💠 Cardano (ADA-USD)": "ADA-USD",
-            
-            "--- MATERIAS PRIMAS ---": "HEADER",
-            "🥇 Oro (GLD)": "GLD", 
-            "🥈 Plata (SLV)": "SLV", 
-            "🛢️ Petróleo Crudo (USO)": "USO", 
-            "🥉 Cobre (COPX)": "COPX",
-            "🌾 Trigo (WEAT)": "WEAT"
+            "₿ Bitcoin (BTC-USD)": "BTC-USD", "⟠ Ethereum (ETH-USD)": "ETH-USD"
         }
         sel_asset = st.selectbox("Mercado:", list(ASSET_UNIVERSE.keys()), label_visibility="collapsed")
         if ASSET_UNIVERSE[sel_asset] == "HEADER": st.stop()
@@ -152,30 +156,32 @@ def render_dashboard():
         moneda_sel = st.selectbox("Moneda:", ["USD ($)", "EUR (€)", "PEN (S/)"])
         sym = moneda_sel.split(" ")[1].replace("(", "").replace(")", "")
         capital_inicial = st.number_input("Capital a Invertir:", value=10000.0, step=1000.0)
-        days_to_project = st.slider("Horizonte (Días):", 10, 252, 21)
+        days_to_project = st.slider("Horizonte Futuro (Días):", 10, 252, 21)
         simulations = {"1k": 1000, "5k": 5000, "10k": 10000}[st.selectbox("Rutas (Monte Carlo):", ["1k", "5k", "10k"], index=1)]
         conf_level = st.slider("Confianza VaR (%):", 90.0, 99.9, 95.0, 0.1)
         
         st.divider()
-        st.header("3. Gobernanza de Riesgo")
+        st.header("3. Máquina del Tiempo")
+        days_ago = st.number_input("Rebobinar mercado (Días):", min_value=10, max_value=150, value=30)
+        
+        st.divider()
+        st.header("4. Gobernanza de Riesgo")
         override_ia = st.toggle("☢️ Stress Test (Ignorar IA)")
         if override_ia:
-            st.error("Motor Variacional en Bypass. Simulando colas pesadas manuales (Hawkes).")
-            manual_lambda = st.slider("Intensidad de Réplicas (λ)", 0.1, 10.0, 5.0)
-            manual_mu = st.slider("Profundidad de Salto (μ)", -0.20, 0.0, -0.05)
-            manual_sigma = st.slider("Volatilidad de Salto (σ)", 0.01, 0.20, 0.08)
+            st.error("Motor Variacional en Bypass. Simulando colas pesadas (Hawkes).")
+            manual_lambda = st.slider("Intensidad (λ)", 0.1, 10.0, 5.0)
+            manual_mu = st.slider("Profundidad (μ)", -0.20, 0.0, -0.05)
+            manual_sigma = st.slider("Volatilidad (σ)", 0.01, 0.20, 0.08)
 
     trading_days = 365 if "USD" in ticker else 252
     
-    # --- INGESTA Y CONTINGENCIA ---
     try:
         df_hist = load_financial_data(ticker, "")
     except Exception:
         df_hist = generate_synthetic_data(ticker, days=500, trading_days=trading_days)
-        st.error("🚨 **ALERTA:** Conexión offline. Desplegando simulación teórica.")
+        st.error("🚨 Conexión offline. Desplegando simulación teórica.")
 
-    # --- FASE 1 & 2: CEREBRO (FFT + INFERENCIA VARIACIONAL) ---
-    with st.spinner("Ejecutando Diferenciación Espectral e Inferencia Variacional..."):
+    with st.spinner("Inferencia Variacional (Tiempo Real)..."):
         df_features = engineer_structural_features(df_hist, trading_days)
         current_regime, feature_list, regime_history, calib_params, trans_matrix = identify_bayesian_regimes(df_features)
     
@@ -183,8 +189,7 @@ def render_dashboard():
     S0 = df_hist['Close'].iloc[-1]
     raw_mu = daily_returns.mean() * trading_days
     
-    # --- FASE 3: FILTRO DE PARTÍCULAS (APF) ---
-    with st.spinner("Extrayendo Tendencia No Lineal (Auxiliary Particle Filter)..."):
+    with st.spinner("Extrayendo Tendencia (APF)..."):
         apf_states = apply_auxiliary_particle_filter(daily_returns.values, num_particles=1000)
         pesos_ewma = np.exp(np.linspace(-1, 0, min(20, len(apf_states))))
         current_mu = np.dot(apf_states[-len(pesos_ewma):], pesos_ewma / pesos_ewma.sum()) * trading_days
@@ -193,7 +198,6 @@ def render_dashboard():
         current_sigma_ann = dynamic_sigma_daily[-1] * np.sqrt(trading_days)
         long_term_sigma_ann = np.mean(dynamic_sigma_daily) * np.sqrt(trading_days)
 
-    # --- ACOPLE DE CALIBRACIÓN ML -> MONTE CARLO ---
     if override_ia:
         ml_lambda_j, ml_mu_j, ml_sigma_j = manual_lambda, manual_mu, manual_sigma
     else:
@@ -202,41 +206,37 @@ def render_dashboard():
         ml_mu_j = np.clip(vi_params['mu_regime'], -0.20, 0.20)
         ml_sigma_j = np.clip(vi_params['sigma_regime'], 0.01, 0.30)
 
-    # --- FASE 4: MOTOR DEL CAOS (NON-MARKOVIAN HAWKES NUMBA JIT) ---
-    with st.spinner("Compilando Escenarios Estocásticos Exactos..."):
+    with st.spinner("Compilando Escenarios Futuros (Hawkes)..."):
         paths = run_montecarlo_advanced_stochastic(
             S0, current_mu, raw_mu, current_sigma_ann, long_term_sigma_ann, 
             days_to_project, simulations, ml_lambda_j, ml_mu_j, ml_sigma_j, trading_days
         )
         prob_pos, var_price, median_price, tp_price = calculate_risk_metrics_phase1(S0, paths, conf_level)
         
-        # Auditoría del Modelo
         aligned_returns = daily_returns.iloc[-len(regime_history):].values
         aligned_apf = apf_states[-len(regime_history):]
         persistencia, durbin_watson, exceedance = calculate_model_diagnostics(aligned_returns, regime_history, aligned_apf)
 
-    # --- CÁLCULOS DE CAPITAL ---
     capital_esperado = (capital_inicial / S0) * median_price
     capital_var = (capital_inicial / S0) * var_price
     rend_esp = capital_esperado - capital_inicial
     rend_var = capital_var - capital_inicial
     estado_ml_txt = "🔴 Estrés Estructural" if current_regime == -1 else "🟢 Expansión Estable" if current_regime == 1 else "⚪ Transición Latente"
     
-    # --- RENDERIZADO VISUAL ---
     st.title(f"Telemetría Cuantitativa: {ticker}")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Precio Base", f"${S0:,.2f}")
     c2.metric("Régimen Inferred (VI)", estado_ml_txt.split(' ', 1)[1])
     c3.metric("Fricción VaR", f"{exceedance*100:.1f}%", delta_color="inverse")
-    c4.metric("Deriva APF Ajustada", f"{current_mu*100:.1f}%")
+    c4.metric("Deriva APF", f"{current_mu*100:.1f}%")
 
-    tab1, tab2, tab3 = st.tabs(["📈 Proyección Generativa", "🔬 Auditoría de Manifold", "🧪 Backtest Walk-Forward"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 Proyección Futura", "🔬 Auditoría de Manifold", "🧪 Backtest (Walk-Forward)", "⏱️ Máquina del Tiempo"])
     
     with tab1:
         dir_t, just_t = generate_directive(prob_pos, current_regime)
         col_dir, col_tp, col_sl = st.columns(3)
         col_dir.info(f"**DIRECTRIZ:**\n\n**{dir_t}**\n\n*{just_t}*")
-        col_tp.success(f"**TAKE PROFIT (Probabilístico):**\n\n**${tp_price:,.2f}**")
+        col_tp.success(f"**TAKE PROFIT:**\n\n**${tp_price:,.2f}**")
         col_sl.error(f"**STOP-LOSS (VaR {conf_level}%):**\n\n**${var_price:,.2f}**")
         
         fig = go.Figure()
@@ -247,77 +247,81 @@ def render_dashboard():
         fig.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0))
         st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("---")
-        cap1, cap2, cap3 = st.columns(3)
-        cap1.metric(f"Capital Invertido ({sym})", f"{sym}{capital_inicial:,.2f}")
-        cap2.metric(f"Valor Esperado ({sym})", f"{sym}{capital_esperado:,.2f}", f"{sym}{rend_esp:+,.2f}")
-        cap3.metric(f"Capital en Riesgo ({sym})", f"{sym}{capital_var:,.2f}", f"{sym}{rend_var:+,.2f}", delta_color="inverse")
-
     with tab2:
-        # Gobernanza Visual: Renderizado del Manifold Histórico
         aligned_dates = df_features.index
         aligned_prices = df_hist.loc[aligned_dates, 'Close']
-        
         fig_manifold = go.Figure()
         fig_manifold.add_trace(go.Scatter(x=aligned_dates, y=aligned_prices, mode='lines', line=dict(color='#333', width=1), name='Precio Activo'))
-        
         color_map = {-1: 'rgba(255, 0, 0, 0.4)', 0: 'rgba(150, 150, 150, 0.4)', 1: 'rgba(0, 255, 0, 0.4)'}
         for reg_val, reg_name in zip([-1, 0, 1], ['Estrés', 'Transición', 'Expansión']):
             mask = (regime_history == reg_val)
-            fig_manifold.add_trace(go.Scatter(
-                x=aligned_dates[mask], y=aligned_prices[mask], mode='markers',
-                marker=dict(color=color_map[reg_val], size=6), name=f'Reg. {reg_name}'
-            ))
-        fig_manifold.update_layout(title="Auditoría de Estados Latentes (Inferencia Variacional)", height=350, margin=dict(l=0, r=0, t=30, b=0))
+            fig_manifold.add_trace(go.Scatter(x=aligned_dates[mask], y=aligned_prices[mask], mode='markers', marker=dict(color=color_map[reg_val], size=6), name=f'Reg. {reg_name}'))
+        fig_manifold.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0))
         st.plotly_chart(fig_manifold, use_container_width=True)
 
-        st.divider()
-        insights = interpret_structural_features(df_features.iloc[-1])
-        
-        col_insight, col_matrix = st.columns([2, 1])
-        with col_insight:
-            st.markdown("#### Traducción Clínica Actual")
-            for i in insights: st.markdown(f"> {i}")
-            st.metric("Pureza de Tendencia (D-W)", f"{durbin_watson:.2f}", "Ideal: ~2.00")
-            
-        with col_matrix:
-            st.markdown("#### Matriz de Inercia de Markov ($A_{ij}$)")
-            try:
-                df_trans = pd.DataFrame(trans_matrix).round(3)
-                df_trans.index.name = "De \\ A"
-                st.dataframe(df_trans.style.background_gradient(cmap='Blues'), use_container_width=True)
-            except:
-                st.caption("Matriz en calibración...")
-
     with tab3:
-        st.markdown("### Rendimiento Histórico (Walk-Forward)")
-        if st.button("Ejecutar Backtest"):
-            with st.spinner("Calculando trayectoria histórica..."):
-                bt_results = run_walk_forward_backtest(df_hist)
-                cum_pnl = bt_results['Pnl'].cumsum()
-                
-                fig_bt = go.Figure()
-                fig_bt.add_trace(go.Scatter(x=cum_pnl.index, y=cum_pnl, name="Estrategia IA", line=dict(color='green')))
-                fig_bt.update_layout(title="Curva de Capital Acumulado (Backtest)", height=300)
-                st.plotly_chart(fig_bt, use_container_width=True)
-                
-                c_win, c_sharpe = st.columns(2)
-                c_win.metric("Win Rate", f"{(bt_results['Pnl'] > 0).mean()*100:.1f}%")
-                c_sharpe.metric("Sharpe Ratio", f"{bt_results['Pnl'].mean() / bt_results['Pnl'].std() * np.sqrt(252):.2f}")
+        if run_walk_forward_backtest is not None:
+            st.markdown("### Rendimiento Histórico")
+            if st.button("Ejecutar Walk-Forward"):
+                with st.spinner("Procesando ventanas dinámicas..."):
+                    bt_results = run_walk_forward_backtest(df_hist)
+                    cum_pnl = bt_results['Pnl'].cumsum()
+                    fig_bt = go.Figure()
+                    fig_bt.add_trace(go.Scatter(x=cum_pnl.index, y=cum_pnl, line=dict(color='green')))
+                    st.plotly_chart(fig_bt, use_container_width=True)
+        else:
+            st.warning("El módulo de backtest_engine.py no está disponible.")
 
-    # --- EXPORTACIÓN DE REPORTE INSTITUCIONAL ---
+    with tab4:
+        st.markdown(f"### Validación Empírica: {days_ago} días al pasado")
+        st.write("Aisla a la IA en el pasado y compara su predicción ciega contra lo que realmente ocurrió.")
+        
+        if st.button(f"Ejecutar Máquina del Tiempo (-{days_ago}d)"):
+            with st.spinner("Rebobinando y re-calculando universo..."):
+                real_prices, retro_paths, past_S0, future_dates = run_time_machine(df_hist, days_ago, simulations, trading_days)
+                
+                # Para limpiar el gráfico, tomaremos la Mediana y el VaR del 5% y 95% de las proyecciones
+                median_path = np.median(retro_paths, axis=1)
+                upper_bound = np.percentile(retro_paths, 95, axis=1)
+                lower_bound = np.percentile(retro_paths, 5, axis=1)
+                
+                fig_time = go.Figure()
+                
+                # 1. El cono de incertidumbre de nuestro modelo
+                x_axis = np.arange(len(median_path))
+                fig_time.add_trace(go.Scatter(
+                    x=np.concatenate([x_axis, x_axis[::-1]]),
+                    y=np.concatenate([upper_bound, lower_bound[::-1]]),
+                    fill='toself', fillcolor='rgba(0,100,255,0.1)', line=dict(color='rgba(255,255,255,0)'),
+                    name="Cono de Probabilidad (IA)"
+                ))
+                
+                # 2. La mediana proyectada
+                fig_time.add_trace(go.Scatter(x=x_axis, y=median_path, mode='lines', line=dict(color='blue', dash='dash'), name='Mediana Proyectada'))
+                
+                # 3. La dura realidad (hasta los días disponibles)
+                # Alineamos los arrays (el real_prices puede tener menos días si hay fines de semana)
+                limit = min(len(x_axis), len(real_prices))
+                fig_time.add_trace(go.Scatter(x=x_axis[:limit], y=real_prices[:limit], mode='lines', line=dict(color='black', width=3), name='Realidad Empírica'))
+                
+                fig_time.add_trace(go.Scatter(x=[0], y=[past_S0], mode='markers', marker=dict(color='red', size=10), name='Punto de Inferencia Ciega'))
+                
+                fig_time.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0))
+                st.plotly_chart(fig_time, use_container_width=True)
+
+    # --- EXPORTACIÓN ---
     report_data = {
         "ticker": ticker, "S0": S0, "tp_price": tp_price, "var_price": var_price,
         "estado_ml": estado_ml_txt.split(' ', 1)[1], "persistencia": persistencia, "exceedance": exceedance,
-        "conf_level": conf_level, "insights": insights, "sym": sym, "directriz": dir_t,
+        "conf_level": conf_level, "insights": interpret_structural_features(df_features.iloc[-1]), "sym": sym, "directriz": dir_t,
         "justificacion": just_t, "capital_inicial": capital_inicial, 
         "capital_esperado": capital_esperado, "capital_var": capital_var,
         "rend_esp": rend_esp, "vol_dyn": current_sigma_ann * 100, 
-        "contexto_riesgo": "Estrés Elevado" if current_regime == -1 else "Estabilidad Operativa",
+        "contexto_riesgo": "Estrés" if current_regime == -1 else "Nominal",
         "days": days_to_project, "tnx": risk_free_rate, "vix": current_vix
     }
     st.sidebar.divider()
-    st.sidebar.download_button("📥 Descargar Memorandum Cuantitativo (PDF)", create_pdf_report(report_data), f"Memorandum_{ticker}.pdf", mime="application/pdf", use_container_width=True)
+    st.sidebar.download_button("📥 Reporte PDF", create_pdf_report(report_data), f"Mem_{ticker}.pdf", mime="application/pdf", use_container_width=True)
 
 if __name__ == "__main__": 
     render_dashboard()
